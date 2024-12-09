@@ -12,3 +12,7 @@ docs/
 
 # Dotenv file
 .env
+.DS_Store
+src/.DS_Store
+src/libraries/.DS_Store
+test/.DS_Store
