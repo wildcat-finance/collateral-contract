@@ -5,10 +5,11 @@ import './libraries/LibERC20.sol';
 import './libraries/FunctionTypeCasts.sol';
 
 interface IWildcatMarket {
-    function repayAndProcessUnpaidWithdrawalBatches(uint256 repayAmount, uint256 maxBatches) external;
+    function asset() external view returns (address);
+    function delinquencyGracePeriod() external view returns (uint);
     function isClosed() external view returns (bool);
     function owner() external view returns (address); // used by the factory
-    function asset() external view returns (address);
+    function repayAndProcessUnpaidWithdrawalBatches(uint256 repayAmount, uint256 maxBatches) external;
 }
 
 contract WildcatMarketCollateral {
@@ -24,12 +25,15 @@ contract WildcatMarketCollateral {
     address public immutable bebopSettlementContract =
       0xbbbbbBB520d69a9775E85b458C58c648259FAD5F;
 
+    uint public immutable liquidationCooldown;
+    uint public nextLiquidationTrigger;
+
     // factory address that deployed the collateral contract
     address public immutable factory;
 
     event CollateralDeposited(address, address, uint, uint);
     event CollateralReclaimed(address, address, uint, uint);
-    event CollateralRepaid(uint);
+    event CollateralRepaid(address, uint, uint);
 
     error BadRescueAttempt(address);
     error BebopPMMQuoteFailed(bytes);
@@ -93,6 +97,9 @@ contract WildcatMarketCollateral {
 
       underlyingAsset = underlyingMarket.asset();
 
+      liquidationCooldown = underlyingMarket.delinquencyGracePeriod();
+      nextLiquidationTrigger = block.timestamp;
+
     }
 
     function deposit(uint amount) public onlyBorrower() {
@@ -130,6 +137,16 @@ contract WildcatMarketCollateral {
         bytes calldata _quoteCalldata,
         uint lengthWithdrawalQueue
     ) public returns (uint availableToRepay) {
+
+        bool marketInPenalty = true; // TODO: replace this with an 'is in penalty' check
+
+        require(marketInPenalty, "Market is not in penalty state!");
+
+        // TODO: do we want to keep this cooldown? Seems like it's a fair balance to
+        // allow people to tap it periodically but not constantly, it's not like the
+        // borrower can pull the assets out without terminating the market.
+        require(block.timestamp >= nextLiquidationTrigger, "Liquidator in cooldown!");
+
         (bool success, bytes memory data) = bebopSettlementContract.call(_quoteCalldata);
 
         if (!success) { revert BebopPMMQuoteFailed(data); }
@@ -141,7 +158,9 @@ contract WildcatMarketCollateral {
         // Process underlying market to transfer new funds to reserved assets pool
         underlyingMarket.repayAndProcessUnpaidWithdrawalBatches(0, lengthWithdrawalQueue);
 
-        emit CollateralRepaid(availableToRepay);
+        nextLiquidationTrigger = block.timestamp + liquidationCooldown;
+
+        emit CollateralRepaid(address(underlyingMarket), availableToRepay, block.timestamp);
     }
 
     function reclaimCollateral() public onlyBorrower() {
