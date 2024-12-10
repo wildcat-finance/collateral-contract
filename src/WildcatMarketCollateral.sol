@@ -37,8 +37,8 @@ contract WildcatMarketCollateral {
         collateralParametersPointer := mload(0x40)
         // one word worth of space for three addresses in the struct: 96 bytes = 0x60
         mstore(0x40, add(collateralParametersPointer, 0x60))
-        // Write the selector for IHooksFactory.getMarketParameters
-        mstore(0x00, 0x04032dbb)
+        // Write the selector for WildcatMarketCollateralFactory.getCollateralParameters
+        mstore(0x00, 0x5d861505)
         // Call `getCollateralParameters` and copy the returned struct to the allocated memory
         // buffer, reverting if the call fails or does not return the correct amount of bytes.
         // This overrides all the ABI decoding safety checks, as the call is always made to
