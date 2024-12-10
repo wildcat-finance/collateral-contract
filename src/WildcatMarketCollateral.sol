@@ -6,8 +6,8 @@ import './libraries/FunctionTypeCasts.sol';
 
 interface IWildcatMarket {
     function repayAndProcessUnpaidWithdrawalBatches(uint256 repayAmount, uint256 maxBatches) external;
-    function owner() external view returns (address);
     function isClosed() external view returns (bool);
+    function owner() external view returns (address); // used by the factory
     function asset() external view returns (address);
 }
 
@@ -21,15 +21,40 @@ contract WildcatMarketCollateral {
 
     address public immutable underlyingAsset;
 
+    address public immutable bebopSettlementContract =
+      0xbbbbbBB520d69a9775E85b458C58c648259FAD5F;
+
     // factory address that deployed the collateral contract
     address public immutable factory;
 
     event CollateralDeposited(address, address, uint, uint);
     event CollateralReclaimed(address, address, uint, uint);
+    event CollateralRepaid(uint);
+
+    error BadRescueAttempt(address);
+    error BebopPMMQuoteFailed(bytes);
 
     modifier onlyBorrower() {
         require(msg.sender == marketBorrower);
         _;
+    }
+
+    /**
+     * @dev Return the contract name "WildcatCollateralContractV1"
+     */
+    function name() external pure returns (string memory) {
+        // Use yul to avoid duplicate memory allocation and reduce code size
+        // Uses words at 0x20, 0x40, 0x60
+        // 0x20 is overwritten with the ABI offset (32)
+        // 0x40 contains the free pointer which will be 1 byte when this function executes.
+        // The length of the string (27) is written to the last byte of the free pointer word.
+        // 0x60 is the zero slot, so it will not have any dirty bits when this function executes.
+        // It is overwritten with the name bytes in the same operation as the length.
+        assembly {
+        mstore(0x53, 0x1b57696c64636174436f6c6c61746572616c436f6e74726163745631)
+        mstore(0x20, 0x20)
+        return(0x20, 0x60)
+        }
     }
 
     function _getCollateralParameters() internal view returns (uint256 collateralParametersPointer) {
@@ -42,7 +67,7 @@ contract WildcatMarketCollateral {
         // Call `getCollateralParameters` and copy the returned struct to the allocated memory
         // buffer, reverting if the call fails or does not return the correct amount of bytes.
         // This overrides all the ABI decoding safety checks, as the call is always made to
-        // the factory contract which will only ever return the prepared market parameters.
+        // the factory contract which will only ever return the prepared collateral parameters.
         if iszero(
             and(
             eq(returndatasize(), 0x60),
@@ -71,15 +96,23 @@ contract WildcatMarketCollateral {
     }
 
     function deposit(uint amount) public onlyBorrower() {
-
         // Transfer deposit from caller
         collateralAsset.safeTransferFrom(msg.sender, address(this), amount);
 
         emit CollateralDeposited(msg.sender, address(this), amount, block.timestamp);
     }
 
-    // Permits recovery of ERC-20s that aren't the collateral asset
-    function rescueFunds() public onlyBorrower() {
+    /**
+    * @dev Token rescue function for recovering tokens sent to the contract
+    *      contract by mistake or otherwise outside of the normal course of
+    *      operation.
+    */
+    function rescueTokens(address token) public onlyBorrower() {
+      if ((token == underlyingAsset) || (token == address(this))) {
+        revert BadRescueAttempt(token);
+      }
+
+      token.safeTransferAll(msg.sender);
     }
     
     // Sells and transfers up to the delinquent debt of the market
@@ -93,7 +126,22 @@ contract WildcatMarketCollateral {
     // doesn't work if we're only liquidating precisely up to what is needed: there
     // will be some dust left over. That means we probably need to liquidate a few
     // bips higher, in the same way as we need to do approvals in V1 through the UI.
-    function liquidateCollateral(uint marketDelinquentDebt) public returns (uint) {
+    function liquidateCollateral(
+        bytes calldata _quoteCalldata,
+        uint lengthWithdrawalQueue
+    ) public returns (uint availableToRepay) {
+        (bool success, bytes memory data) = bebopSettlementContract.call(_quoteCalldata);
+
+        if (!success) { revert BebopPMMQuoteFailed(data); }
+    
+        availableToRepay = collateralAsset.balanceOf(address(this));
+
+        collateralAsset.safeTransferAll(address(underlyingMarket));
+
+        // Process underlying market to transfer new funds to reserved assets pool
+        underlyingMarket.repayAndProcessUnpaidWithdrawalBatches(0, lengthWithdrawalQueue);
+
+        emit CollateralRepaid(availableToRepay);
     }
 
     function reclaimCollateral() public onlyBorrower() {

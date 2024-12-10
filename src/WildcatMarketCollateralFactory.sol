@@ -39,6 +39,24 @@ contract WildcatMarketCollateralFactory {
     }
 
     /**
+     * @dev Return the contract name "WildcatCollateralFactoryV1"
+     */
+    function name() external pure returns (string memory) {
+        // Use yul to avoid duplicate memory allocation and reduce code size
+        // Uses words at 0x20, 0x40, 0x60
+        // 0x20 is overwritten with the ABI offset (32)
+        // 0x40 contains the free pointer which will be 1 byte when this function executes.
+        // The length of the string (26) is written to the last byte of the free pointer word.
+        // 0x60 is the zero slot, so it will not have any dirty bits when this function executes.
+        // It is overwritten with the name bytes in the same operation as the length.
+        assembly {
+        mstore(0x53, 0x1a57696c64636174436F6c6c61746572616c466163746f72795631)
+        mstore(0x20, 0x20)
+        return(0x20, 0x60)
+        }
+    }
+
+    /**
      * @dev Get the temporarily stored collateral parameters for a contract that is
      *      currently being deployed.
      */
