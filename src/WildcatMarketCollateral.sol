@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LicenseRef-Commons-Clause-1.0
 pragma solidity >=0.8.20;
 
+import './libraries/LibERC20.sol';
+
 interface IERC20 {
     function balanceOf(address owner) external view returns (uint256);
     function approve(address spender, uint256 amount) external returns (bool);
@@ -31,6 +33,14 @@ contract WildcatMarketCollateral {
     constructor() {
         // need to fetch collateral and underlying market addresses from the factory
         // the borrower itself is going to be msg.sender
+    }
+
+    function deposit(uint amount) public onlyBorrower() {
+
+        // Transfer deposit from caller
+        collateralAsset.safeTransferFrom(msg.sender, address(this), amount);
+
+        emit CollateralDeposited();
     }
 
     // Permits recovery of ERC-20s that aren't the collateral asset
