@@ -2,13 +2,7 @@
 pragma solidity >=0.8.20;
 
 import './libraries/LibERC20.sol';
-
-interface IERC20 {
-    function balanceOf(address owner) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function transfer(address recipient, uint256 amount) external returns (bool);
-}
+import './libraries/FunctionTypeCasts.sol';
 
 interface IWildcatMarket {
     function repayAndProcessUnpaidWithdrawalBatches(uint256 repayAmount, uint256 maxBatches) external;
@@ -18,21 +12,62 @@ interface IWildcatMarket {
 }
 
 contract WildcatMarketCollateral {
+    using LibERC20 for address;
+    using FunctionTypeCasts for *;
 
-    IERC20 public immutable collateralAsset;
+    address public immutable collateralAsset;
     IWildcatMarket public immutable underlyingMarket;
-
-    // owner of collateral contract and underlying market will always match
     address public immutable marketBorrower;
+
+    address public immutable underlyingAsset;
+
+    // factory address that deployed the collateral contract
+    address public immutable factory;
+
+    event CollateralDeposited(address, address, uint, uint);
+    event CollateralReclaimed(address, address, uint, uint);
 
     modifier onlyBorrower() {
         require(msg.sender == marketBorrower);
         _;
     }
 
+    function _getCollateralParameters() internal view returns (uint256 collateralParametersPointer) {
+        assembly {
+        collateralParametersPointer := mload(0x40)
+        // one word worth of space for three addresses in the struct: 96 bytes = 0x60
+        mstore(0x40, add(collateralParametersPointer, 0x60))
+        // Write the selector for IHooksFactory.getMarketParameters
+        mstore(0x00, 0x04032dbb)
+        // Call `getCollateralParameters` and copy the returned struct to the allocated memory
+        // buffer, reverting if the call fails or does not return the correct amount of bytes.
+        // This overrides all the ABI decoding safety checks, as the call is always made to
+        // the factory contract which will only ever return the prepared market parameters.
+        if iszero(
+            and(
+            eq(returndatasize(), 0x60),
+            staticcall(gas(), caller(), 0x1c, 0x04, collateralParametersPointer, 0x60)
+            )
+        ) {
+            revert(0, 0)
+        }
+        }
+    }
+
     constructor() {
-        // need to fetch collateral and underlying market addresses from the factory
-        // the borrower itself is going to be msg.sender
+      
+      factory = msg.sender;
+
+      CollateralParameters memory parameters =
+        _getCollateralParameters.asReturnsCollateralParameters()();
+
+      // Set asset metadata
+      collateralAsset = parameters.collateralToken;
+      underlyingMarket = IWildcatMarket(parameters.associatedMarket);
+      marketBorrower = parameters.borrower;
+
+      underlyingAsset = underlyingMarket.asset();
+
     }
 
     function deposit(uint amount) public onlyBorrower() {
@@ -40,7 +75,7 @@ contract WildcatMarketCollateral {
         // Transfer deposit from caller
         collateralAsset.safeTransferFrom(msg.sender, address(this), amount);
 
-        emit CollateralDeposited();
+        emit CollateralDeposited(msg.sender, address(this), amount, block.timestamp);
     }
 
     // Permits recovery of ERC-20s that aren't the collateral asset
@@ -62,7 +97,14 @@ contract WildcatMarketCollateral {
     }
 
     function reclaimCollateral() public onlyBorrower() {
+        require(underlyingMarket.isClosed(), "Market not terminated!");
 
+        // total amount that's in the wallet
+        uint reclaimAmount = underlyingAsset.balanceOf(address(this));
+
+        collateralAsset.safeTransferFrom(address(this), msg.sender, reclaimAmount);
+
+        emit CollateralReclaimed(address(this), msg.sender, reclaimAmount, block.timestamp);
     }
 
 }

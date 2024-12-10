@@ -3,6 +3,7 @@ pragma solidity >=0.8.20;
 
 import './WildcatMarketCollateral.sol';
 import './libraries/LibStoredInitCode.sol';
+import './types/TransientBytesArray.sol';
 
 contract WildcatMarketCollateralFactory {
 
@@ -12,6 +13,7 @@ contract WildcatMarketCollateralFactory {
       address associatedMarket;
     }
 
+    error CollateralContractAlreadyExists();
 
     TransientBytesArray internal constant _tmpCollateralParameters =
       TransientBytesArray.wrap(uint256(keccak256('Transient:TmpCollateralParameterStorage')) - 1);
@@ -36,6 +38,22 @@ contract WildcatMarketCollateralFactory {
         collateralInitCodeHash = _collateralInitCodeHash;
     }
 
+    /**
+     * @dev Get the temporarily stored collateral parameters for a contract that is
+     *      currently being deployed.
+     */
+    function getCollateralParameters()
+        external
+        view
+        returns (CollateralParameters memory parameters)
+    {
+        TmpCollateralParameterStorage memory tmp = _getTmpCollateralParameters();
+
+        parameters.borrower = tmp.borrower;
+        parameters.collateralToken = tmp.collateralToken;
+        parameters.associatedMarket = tmp.associatedMarket;
+    }
+
     ///////////////////////////
     // INTERNAL CODE STORAGE //
     ///////////////////////////
@@ -55,16 +73,23 @@ contract WildcatMarketCollateralFactory {
         _tmpCollateralParameters.write(abi.encode(parameters));
     }
 
+    function contractExists(address _a) internal view returns (bool) {
+      uint size;
+      assembly {
+        size := extcodesize(_a)
+      }
+      return (size > 0);
+    }
+
+    ///////////////////////////
+    //  CONTRACT DEPLOYMENT  //
+    ///////////////////////////
 
     function deployCollateralContract(
-        address _collateralToken, // this is the choice of collateral, not the underlying of the market
+        address _collateralToken,
         address _associatedMarket,
-        bytes32 salt
-    ) public onlyMarketOwner(associatedMarket) returns (address collateralContract) {
-
-    // TODO: feed collateralToken and associatedMarket into the top level of the contract so they
-    //        can be fished out in the same way that markets grabbed their parameters in V1.
-    //        Is there a smarter way to do this?
+        bytes32 salt // use collateral token and underlying market to derive salt?
+    ) public onlyMarketOwner(_associatedMarket) returns (address collateralContract) {
 
     collateralContract = LibStoredInitCode.calculateCreate2Address(ownCreate2Prefix, salt, collateralInitCodeHash);
 
@@ -76,14 +101,16 @@ contract WildcatMarketCollateralFactory {
 
     _setTmpCollateralParameters(tmp);
 
-    if (collateralContract.code.length != 0) {
+    // Do we want this check? Presumably yes, because we'd only want one collateral contract
+    // for each market/collateral type - we could deploy several collateral contracts for
+    // one market (i.e. WETH, cbBTC collateral against a USDC market), just not two WETHs.
+    if (contractExists(collateralContract)) {
       revert CollateralContractAlreadyExists();
     }
 
     LibStoredInitCode.create2WithStoredInitCode(collateralInitCodeStorage, salt);
 
-    _tmpMarketParameters.setEmpty();
-
+    _tmpCollateralParameters.setEmpty();
 
     }
 }
