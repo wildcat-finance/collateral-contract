@@ -5,15 +5,7 @@ import "forge-std/Test.sol";
 import '../src/WildcatMarketCollateralFactory.sol';
 import '../src/WildcatMarketCollateral.sol';
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
-contract MockUSDC is ERC20 {
-    constructor() ERC20("USDC", "USDC") {}
-
-    function mint(address to, uint256 amount) public {
-        _mint(to, amount);
-    }
-}
+import { MockERC20 } from 'solmate/test/utils/mocks/MockERC20.sol';
 
 contract MockWildcatMarketTest is IWildcatMarket {}
 
@@ -23,7 +15,7 @@ contract MockMarketCollateral is WildcatMarketCollateral {}
 contract WildcatMarketCollateralFactoryTest is Test {
 
   WildcatMarketCollateralFactory mockFactory;
-  MockUSDC mockUnderlying;
+  MockERC20 mockUnderlying;
   
   address admin = address(0x01);
 
@@ -38,7 +30,7 @@ contract WildcatMarketCollateralFactoryTest is Test {
 
   function setUp() public {
     (address initCS, uint initCH) = _storeCollateralInitCode();
-    mockUnderlying = new MockUSDC();
+    mockUnderlying = new MockERC20('Token', 'TKN', 18);
 
     // TODO: generate a new market
     mockFactory = new WildcatMarketCollateralFactory(initCS, initCH);
