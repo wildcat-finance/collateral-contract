@@ -13,6 +13,12 @@ contract WildcatMarketCollateralFactory {
       address associatedMarket;
     }
 
+    struct CollateralContract {
+      address collateralContractAddress;
+      address collateralToken;
+      address associatedMarket;
+    }
+
     error CollateralContractAlreadyExists();
 
     TransientBytesArray internal constant _tmpCollateralParameters =
@@ -23,11 +29,29 @@ contract WildcatMarketCollateralFactory {
     address public immutable collateralInitCodeStorage;
     uint256 public immutable collateralInitCodeHash;
 
-    modifier onlyMarketOwner(address market) {
-        if (msg.sender != IWildcatMarket(market).owner()) {
-            revert();
+    mapping (address => CollateralContract[]) public collateralContractList;
+
+    function listCollateralMarkets(address _market, address _asset) public view returns (address[] memory) {
+        CollateralContract[] storage contracts = collateralContractList[msg.sender];
+        uint count = 0;
+
+        for (uint i = 0; i < contracts.length; i++) {
+            if (contracts[i].associatedMarket == _market && contracts[i].collateralToken == _asset) {
+                count++;
+            }
         }
-        _;
+
+        address[] memory result = new address[](count);
+        uint index = 0;
+
+        for (uint i = 0; i < contracts.length; i++) {
+            if (contracts[i].associatedMarket == _market && contracts[i].collateralToken == _asset) {
+                result[index] = contracts[i].collateralContractAddress;
+                index++;
+            }
+        }
+
+        return result;
     }
 
     constructor(
@@ -107,17 +131,9 @@ contract WildcatMarketCollateralFactory {
         address _collateralToken,
         address _associatedMarket,
         bytes32 salt // use collateral token and underlying market to derive salt?
-    ) public onlyMarketOwner(_associatedMarket) returns (address collateralContract) {
+    ) public returns (address collateralContract) {
 
     collateralContract = LibStoredInitCode.calculateCreate2Address(ownCreate2Prefix, salt, collateralInitCodeHash);
-
-    TmpCollateralParameterStorage memory tmp = TmpCollateralParameterStorage({
-      borrower: msg.sender,
-      collateralToken: _collateralToken,
-      associatedMarket: _associatedMarket
-    });
-
-    _setTmpCollateralParameters(tmp);
 
     // Do we want this check? Presumably yes, because we'd only want one collateral contract
     // for each market/collateral type - we could deploy several collateral contracts for
@@ -126,9 +142,17 @@ contract WildcatMarketCollateralFactory {
       revert CollateralContractAlreadyExists();
     }
 
-    LibStoredInitCode.create2WithStoredInitCode(collateralInitCodeStorage, salt);
+    TmpCollateralParameterStorage memory tmp = TmpCollateralParameterStorage({
+      borrower: IWildcatMarket(_associatedMarket).borrower(),
+      collateralToken: _collateralToken,
+      associatedMarket: _associatedMarket
+    });
 
+    _setTmpCollateralParameters(tmp);
+    LibStoredInitCode.create2WithStoredInitCode(collateralInitCodeStorage, salt);
     _tmpCollateralParameters.setEmpty();
+
+    collateralContractList[_associatedMarket].push(CollateralContract(collateralContract, _collateralToken, _associatedMarket));
 
     }
 }
