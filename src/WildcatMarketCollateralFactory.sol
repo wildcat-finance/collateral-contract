@@ -4,7 +4,7 @@ pragma solidity >=0.8.20;
 import './WildcatMarketCollateral.sol';
 import './libraries/LibStoredInitCode.sol';
 import './types/TransientBytesArray.sol';
-
+import './interfaces/IWildcatArchController.sol';
 contract WildcatMarketCollateralFactory {
 
     struct TmpCollateralParameterStorage {
@@ -21,6 +21,18 @@ contract WildcatMarketCollateralFactory {
 
     error CollateralContractAlreadyExists();
 
+    event ExecutorApproved(address indexed executor);
+    event ExecutorRemoved(address indexed executor);
+
+    error CallerNotArchControllerOwner();
+
+  modifier onlyArchControllerOwner() {
+    if (msg.sender != IWildcatArchController(archController).owner()) {
+      revert CallerNotArchControllerOwner();
+    }
+    _;
+  }
+
     TransientBytesArray internal constant _tmpCollateralParameters =
       TransientBytesArray.wrap(uint256(keccak256('Transient:TmpCollateralParameterStorage')) - 1);
 
@@ -29,7 +41,11 @@ contract WildcatMarketCollateralFactory {
     address public immutable collateralInitCodeStorage;
     uint256 public immutable collateralInitCodeHash;
 
+    address public immutable archController;
+
     mapping (address => CollateralContract[]) public collateralContractList;
+
+    mapping (address => bool) public isApprovedExecutor;
 
     function listCollateralMarkets(address _market, address _asset) public view returns (address[] memory) {
         CollateralContract[] storage contracts = collateralContractList[msg.sender];
@@ -55,11 +71,23 @@ contract WildcatMarketCollateralFactory {
     }
 
     constructor(
+        address _archController,
         address _collateralInitCodeStorage,
         uint256 _collateralInitCodeHash
     ) {
+        archController = _archController;
         collateralInitCodeStorage = _collateralInitCodeStorage;
         collateralInitCodeHash = _collateralInitCodeHash;
+    }
+
+    function approveExecutor(address _executor) external onlyArchControllerOwner {
+      isApprovedExecutor[_executor] = true;
+      emit ExecutorApproved(_executor);
+    }
+
+    function removeExecutor(address _executor) external onlyArchControllerOwner {
+      isApprovedExecutor[_executor] = false;
+      emit ExecutorRemoved(_executor);
     }
 
     /**
