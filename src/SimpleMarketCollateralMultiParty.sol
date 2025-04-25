@@ -4,9 +4,9 @@ pragma solidity >=0.8.20;
 import "./libraries/LibERC20.sol";
 import "./libraries/FunctionTypeCasts.sol";
 import {WildcatMarketCollateralFactory} from "./WildcatMarketCollateralFactory.sol";
-import "v2-protocol/src/libraries/MarketState.sol";
+import "v2-protocol/libraries/MarketState.sol";
 import "./interfaces/IWildcatMarket.sol";
-import "v2-protocol/src/ReentrancyGuard.sol";
+import "v2-protocol/ReentrancyGuard.sol";
 import "solady/utils/FixedPointMathLib.sol";
 
 using MathUtils for uint256;
@@ -14,7 +14,7 @@ using MathUtils for uint256;
 /// @title SimpleMarketCollateralMultiParty
 /// @notice A simple collateral contract for Wildcat markets that supports
 ///         multiple depositors.
-contract SimpleMarketCollateral is ReentrancyGuard {
+contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     using LibERC20 for address;
     using FunctionTypeCasts for *;
 
@@ -23,7 +23,7 @@ contract SimpleMarketCollateral is ReentrancyGuard {
     mapping(address account => uint256 liquidationPointsCorrection)
         internal liquidationPointsCorrections;
 
-    mapping(address account => uint256 shares) public shares;
+    mapping(address account => uint256 shares) public sharesOf;
 
     uint256 public liquidationPointsPerShare;
 
@@ -188,7 +188,7 @@ contract SimpleMarketCollateral is ReentrancyGuard {
         uint amount
     ) public marketOpen nonReentrant returns (bool) {
         collateralAsset.safeTransferFrom(msg.sender, address(this), amount);
-        shares[msg.sender] += amount;
+        sharesOf[msg.sender] += amount;
         totalShares += amount;
         _correctLiquidationPointsForDeposit(msg.sender, amount);
 
@@ -323,7 +323,7 @@ contract SimpleMarketCollateral is ReentrancyGuard {
     }
 
     function reclaimCollateral() public marketClosed {
-        uint256 _shares = shares[msg.sender];
+        uint256 _shares = sharesOf[msg.sender];
         if (_shares == 0) revert ZeroShares();
 
         uint256 liquidationPoints = (_shares * liquidationPointsPerShare) -
@@ -332,7 +332,7 @@ contract SimpleMarketCollateral is ReentrancyGuard {
         uint256 reclaimAmount = _shares - liquidatedCollateral;
 
         totalShares -= _shares;
-        shares[msg.sender] = 0;
+        sharesOf[msg.sender] = 0;
         liquidationPointsCorrections[msg.sender] = 0;
 
         if (reclaimAmount == 0) revert ZeroReclaimAmount();
@@ -345,7 +345,7 @@ contract SimpleMarketCollateral is ReentrancyGuard {
     function getLiquidatedCollateral(
         address account
     ) public view returns (uint256) {
-        uint256 _shares = shares[account];
+        uint256 _shares = sharesOf[account];
         if (_shares == 0) return 0;
 
         uint256 liquidationPoints = (_shares * liquidationPointsPerShare) -
@@ -354,7 +354,7 @@ contract SimpleMarketCollateral is ReentrancyGuard {
     }
 
     function getReclaimAmount(address account) public view returns (uint256) {
-        uint256 _shares = shares[account];
+        uint256 _shares = sharesOf[account];
         if (_shares == 0) return 0;
 
         uint256 liquidationPoints = (_shares * liquidationPointsPerShare) -

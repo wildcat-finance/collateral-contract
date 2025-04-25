@@ -4,9 +4,9 @@ pragma solidity >=0.8.20;
 import "./libraries/LibERC20.sol";
 import "./libraries/FunctionTypeCasts.sol";
 import {WildcatMarketCollateralFactory} from "./WildcatMarketCollateralFactory.sol";
-import "v2-protocol/src/libraries/MarketState.sol";
+import "v2-protocol/libraries/MarketState.sol";
 import "./interfaces/IWildcatMarket.sol";
-import "v2-protocol/src/ReentrancyGuard.sol";
+import "v2-protocol/ReentrancyGuard.sol";
 
 using MathUtils for uint256;
 
