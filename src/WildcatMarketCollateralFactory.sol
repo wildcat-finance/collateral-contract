@@ -191,9 +191,11 @@ contract WildcatMarketCollateralFactory {
 
     function deployCollateralContract(
         address _collateralToken,
-        address _associatedMarket,
-        bytes32 salt // use collateral token and underlying market to derive salt?
+        address _associatedMarket
     ) public returns (address collateralContract) {
+        bytes32 salt = keccak256(
+            abi.encode(_collateralToken, _associatedMarket)
+        );
         collateralContract = LibStoredInitCode.calculateCreate2Address(
             ownCreate2Prefix,
             salt,
