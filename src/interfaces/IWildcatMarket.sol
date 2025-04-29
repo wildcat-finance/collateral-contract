@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.20;
 
-import "v2-protocol/src/libraries/MarketState.sol";
+import {MarketState} from "v2-protocol/libraries/MarketState.sol";
 
 interface IWildcatMarket {
     function asset() external view returns (address);
