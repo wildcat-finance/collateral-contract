@@ -48,6 +48,12 @@ struct Depositor {
 ///         by a user once the market is terminated (assuming no further liquidations occur).
 ///
 ///         If tokens are sent to the contract by mistake, the borrower can rescue them using the `rescueTokens` function.
+///         The contract internally tracks the amount of the collateral asset that it has as the difference between the total
+///         deposited and the total liquidated / withdrawn. If the contract has an excess balance of the collateral asset, it
+///         can be rescued by the borrower.
+///
+///         Note: This contract does not support rebasing tokens or other assets with non-standard transfer
+///         semantics due to its use of internal balance tracking rather than the ERC20 `balanceOf` function.
 contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     using LibERC20 for address;
     using FunctionTypeCasts for *;
@@ -287,15 +293,21 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
      *      operation.
      *
      *      Only the borrower can rescue tokens from the contract.
+     *
      *      The underlying asset can only be rescued if the market is closed; if the market
-     *      is open, the underlying asset is transferred to the market.
-     *      The collateral asset can never be rescued.
+     *      is open, any balance in the underlying asset is transferred to the market.
+     *
+     *      The collateral asset can be rescued if the balance is greater than the available collateral.
      */
     function rescueTokens(address token) public onlyBorrower nonReentrant {
-        // The collateral asset cannot be rescued.
-        if (token == collateralAsset) revert BadRescueAttempt(token);
-
         uint256 tokenBalance = token.balanceOf(address(this));
+        // The collateral asset cannot be rescued.
+        if (token == collateralAsset) {
+            tokenBalance = tokenBalance.satSub(availableCollateral());
+            if (tokenBalance == 0) revert ZeroTokenBalance();
+        }
+
+        
         if (tokenBalance == 0) revert ZeroTokenBalance();
 
         // The liquidation process will always repay 100% of underlying assets received from bebop;
