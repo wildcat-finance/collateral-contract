@@ -10,6 +10,12 @@ import "v2-protocol/ReentrancyGuard.sol";
 import "solady/utils/FixedPointMathLib.sol";
 
 using MathUtils for uint256;
+using SafeCastLib for uint256;
+
+struct Depositor {
+    bool hasReclaimed;
+    uint248 amountDeposited;
+}
 
 /// @title SimpleMarketCollateralMultiParty
 /// @notice A simple collateral contract for Wildcat markets that supports
@@ -21,13 +27,53 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     uint128 internal constant POINTS_MULTIPLIER = type(uint128).max;
 
     mapping(address account => uint256 liquidationPointsCorrection)
-        internal liquidationPointsCorrections;
+        public liquidationPointsCorrections;
 
-    mapping(address account => uint256 shares) public sharesOf;
+    // mapping(address account => uint256 shares) public sharesOf;
+    mapping(address account => Depositor depositor) internal _depositors;
+
+    /**
+     * @dev Returns the active shares of an account. Note that once an account
+     *      has withdrawn, this function will return 0 but the `amountDeposited` value
+     *      will still be stored in the `_depositors` mapping for post-withdrawal
+     *      queries about the account's deposited & liquidated collateral.
+     */
+    function sharesOf(address account) public view returns (uint256) {
+        Depositor memory depositor = _depositors[account];
+        if (depositor.hasReclaimed) return 0;
+        return depositor.amountDeposited;
+    }
+
+    function getDepositor(
+        address account
+    ) public view returns (bool hasWithdrawn, uint248 amountDeposited) {
+        Depositor memory depositor = _depositors[account];
+        hasWithdrawn = depositor.hasReclaimed;
+        amountDeposited = depositor.amountDeposited;
+    }
 
     uint256 public liquidationPointsPerShare;
 
-    uint256 public totalShares;
+    /// @dev The total active (unwithdrawn) shares of the contract.
+    uint248 public totalShares;
+    /// @dev The total amount of shares that have been withdrawn.
+    uint248 public totalWithdrawn;
+    /// @dev The total amount of collateral that has been liquidated.
+    uint248 public totalLiquidated;
+
+    /// @dev The total amount of collateral that has been deposited over
+    ///      the lifetime of the contract.
+    function totalDeposited() public view returns (uint248) {
+        return totalShares + totalWithdrawn;
+    }
+
+    /// @dev Returns the total available collateral of the contract.
+    ///      This is calculated in the contract rather than using the ERC20 balance
+    ///      to ensure the borrower can rescue collateral tokens sent to the contract
+    ///      by mistake.
+    function availableCollateral() public view returns (uint248) {
+        return totalShares - totalLiquidated;
+    }
 
     // factory address that deployed the collateral contract
     address public immutable factory;
@@ -40,14 +86,21 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     address public immutable bebopSettlementContract =
         0xbbbbbBB520d69a9775E85b458C58c648259FAD5F;
 
-    uint public immutable liquidationCooldown;
+    uint32 public immutable liquidationCooldown;
+
     /// @dev The maximum repayment as a fraction of the delinquent debt
     ///      105% means that the market can repay up to 5% more than the delinquent debt
-    uint public immutable maxRepaymentBips = 10_500; // 105%
-    uint public nextLiquidationTrigger;
+    uint16 public immutable maxRepaymentBips = 10_500; // 105%
+
+    uint32 public nextLiquidationTrigger;
 
     event CollateralDeposited(address depositor, uint256 amountDeposited);
-    event CollateralReclaimed(address reclaimant, uint256 amountReclaimed);
+    event CollateralReclaimed(
+        address reclaimant,
+        uint256 sharesBurned,
+        uint256 liquidatedCollateral,
+        uint256 amountReclaimed
+    );
     event Liquidation(
         address liquidator,
         uint256 collateralLiquidated,
@@ -69,6 +122,9 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     error ZeroTokenBalance();
     error ZeroShares();
     error ZeroReclaimAmount();
+    error AlreadyReclaimed();
+    error ZeroDepositAmount();
+    error DivFailed();
 
     /// When a user makes a deposit, we track the amount of collateral that had already been liquidated as of their deposit
     /// so as to ensure they are not being penalized for collateral liquidations that occurred previously.
@@ -180,15 +236,16 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         underlyingAsset = market.asset();
 
-        liquidationCooldown = market.delinquencyGracePeriod();
-        nextLiquidationTrigger = block.timestamp;
+        liquidationCooldown = market.delinquencyGracePeriod().toUint32();
     }
 
     function deposit(
-        uint amount
+        uint256 _amount
     ) public marketOpen nonReentrant returns (bool) {
+        if (_amount == 0) revert ZeroDepositAmount();
+        uint248 amount = _amount.toUint248();
         collateralAsset.safeTransferFrom(msg.sender, address(this), amount);
-        sharesOf[msg.sender] += amount;
+        _depositors[msg.sender].amountDeposited += amount;
         totalShares += amount;
         _correctLiquidationPointsForDeposit(msg.sender, amount);
 
@@ -235,7 +292,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         returns (bool marketInPenalty, uint256 delinquentDebt)
     {
         MarketState memory state = market.currentState();
-        if (state.isClosed) revert MarketNotTerminated();
+        if (state.isClosed) revert MarketTerminated();
 
         // Check whether market delinquency timer is past the grace period
         marketInPenalty = state.timeDelinquent > liquidationCooldown;
@@ -253,12 +310,12 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     /// NOTE: The amount of the underlying asset received MUST NOT exceed the market's
     ///       delinquent debt multiplied by the max repayment fraction.
     ///
-    /// @param _quoteCalldata The calldata for the Bebop PMM quote
+    /// @param quoteCalldata The calldata for the Bebop PMM quote
     /// @param lengthWithdrawalQueue The number of withdrawal batches to process
     /// @param maxCollateralToLiquidate The maximum amount of collateral to liquidate
     /// @param minUnderlyingOut The minimum amount of underlying asset to receive
     function liquidateCollateral(
-        bytes calldata _quoteCalldata,
+        bytes calldata quoteCalldata,
         uint lengthWithdrawalQueue,
         uint maxCollateralToLiquidate,
         uint minUnderlyingOut
@@ -272,13 +329,15 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
             bool marketInPenalty,
             uint delinquentDebt
         ) = getMarketDelinquencyStatus();
-        uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
 
         // Ensure the market is in penalty state and there is no active cooldown
         if (!marketInPenalty || delinquentDebt == 0)
             revert MarketNotInPenalty();
         if (block.timestamp < nextLiquidationTrigger)
             revert LiquidationInCooldown();
+
+        // Calculate the maximum repayment amount
+        uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
 
         // Approve the Bebop settlement contract to spend the collateral
         collateralAsset.safeApprove(
@@ -288,7 +347,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         uint beforeBalance = collateralAsset.balanceOf(address(this));
         (bool success, bytes memory data) = bebopSettlementContract.call(
-            _quoteCalldata
+            quoteCalldata
         );
         if (!success) revert BebopSwapFailed(data);
         collateralAsset.safeApprove(address(bebopSettlementContract), 0);
@@ -307,7 +366,9 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         underlyingAsset.safeTransfer(address(market), underlyingAmountReceived);
         market.repayAndProcessUnpaidWithdrawalBatches(0, lengthWithdrawalQueue);
 
-        nextLiquidationTrigger = block.timestamp + liquidationCooldown;
+        nextLiquidationTrigger =
+            block.timestamp.toUint32() +
+            liquidationCooldown;
 
         uint collateralLiquidated = beforeBalance - afterBalance;
         emit Liquidation(
@@ -320,46 +381,86 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         liquidationPointsPerShare +=
             (collateralLiquidated * POINTS_MULTIPLIER) /
             totalShares;
+        totalLiquidated += collateralLiquidated.toUint248();
     }
 
     function reclaimCollateral() public marketClosed {
-        uint256 _shares = sharesOf[msg.sender];
+        Depositor storage account = _depositors[msg.sender];
+
+        if (account.hasReclaimed) revert AlreadyReclaimed();
+
+        uint256 _shares = account.amountDeposited;
         if (_shares == 0) revert ZeroShares();
 
         uint256 liquidationPoints = (_shares * liquidationPointsPerShare) -
             liquidationPointsCorrections[msg.sender];
-        uint256 liquidatedCollateral = liquidationPoints / POINTS_MULTIPLIER;
-        uint256 reclaimAmount = _shares - liquidatedCollateral;
-
-        totalShares -= _shares;
-        sharesOf[msg.sender] = 0;
-        liquidationPointsCorrections[msg.sender] = 0;
+        uint256 liquidatedCollateral = divUp(
+            liquidationPoints,
+            POINTS_MULTIPLIER
+        );
+        uint256 reclaimAmount = _shares.satSub(liquidatedCollateral);
 
         if (reclaimAmount == 0) revert ZeroReclaimAmount();
 
+        totalWithdrawn += uint248(_shares);
+        account.hasReclaimed = true;
+        totalShares -= uint248(_shares);
         collateralAsset.safeTransfer(msg.sender, reclaimAmount);
 
-        emit CollateralReclaimed(msg.sender, reclaimAmount);
+        emit CollateralReclaimed(
+            msg.sender,
+            _shares,
+            liquidatedCollateral,
+            reclaimAmount
+        );
     }
 
+    /// @dev Returns the total collateral that has been liquidated from an
+    ///      account's deposits. This value is cumulative and is not affected
+    ///      by withdrawals.
     function getLiquidatedCollateral(
         address account
     ) public view returns (uint256) {
-        uint256 _shares = sharesOf[account];
+        uint256 _shares = _depositors[account].amountDeposited;
         if (_shares == 0) return 0;
 
         uint256 liquidationPoints = (_shares * liquidationPointsPerShare) -
             liquidationPointsCorrections[account];
-        return liquidationPoints / POINTS_MULTIPLIER;
+        return divUp(liquidationPoints, POINTS_MULTIPLIER);
     }
 
-    function getReclaimAmount(address account) public view returns (uint256) {
-        uint256 _shares = sharesOf[account];
+    /// @dev Returns the amount of collateral that can be reclaimed by an
+    ///      account. This is the portion of the account's deposited collateral
+    ///      that has not been liquidated or withdrawn.
+    function getReclaimableAmount(
+        address account
+    ) public view returns (uint256) {
+        Depositor memory depositor = _depositors[account];
+        if (depositor.hasReclaimed) return 0;
+
+        uint256 _shares = depositor.amountDeposited;
         if (_shares == 0) return 0;
 
         uint256 liquidationPoints = (_shares * liquidationPointsPerShare) -
             liquidationPointsCorrections[account];
-        uint256 liquidatedCollateral = liquidationPoints / POINTS_MULTIPLIER;
+        uint256 liquidatedCollateral = divUp(
+            liquidationPoints,
+            POINTS_MULTIPLIER
+        );
         return _shares - liquidatedCollateral;
+    }
+
+    /// @dev Returns `ceil(x / d)`.
+    /// Reverts if `d` is zero.
+    /// @custom:author Solady (https://github.com/vectorized/solady/blob/main/src/utils/FixedPointMathLib.sol)
+    function divUp(uint256 x, uint256 d) internal pure returns (uint256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            if iszero(d) {
+                mstore(0x00, 0x65244e4e) // `DivFailed()`.
+                revert(0x1c, 0x04)
+            }
+            z := add(iszero(iszero(mod(x, d))), div(x, d))
+        }
     }
 }
