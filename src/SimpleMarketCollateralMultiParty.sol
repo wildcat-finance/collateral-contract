@@ -46,6 +46,8 @@ struct Depositor {
 ///
 ///         The `getReclaimableAmount` function can be used to query the amount of collateral that can be reclaimed
 ///         by a user once the market is terminated (assuming no further liquidations occur).
+///
+///         If tokens are sent to the contract by mistake, the borrower can rescue them using the `rescueTokens` function.
 contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     using LibERC20 for address;
     using FunctionTypeCasts for *;
@@ -410,7 +412,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         totalLiquidated += collateralLiquidated.toUint248();
     }
 
-    function reclaimCollateral() public marketClosed {
+    function reclaimCollateral() public marketClosed nonReentrant {
         Depositor storage account = _depositors[msg.sender];
 
         if (account.hasReclaimed) revert AlreadyReclaimed();
