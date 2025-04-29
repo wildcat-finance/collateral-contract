@@ -18,8 +18,34 @@ struct Depositor {
 }
 
 /// @title SimpleMarketCollateralMultiParty
-/// @notice A simple collateral contract for Wildcat markets that supports
-///         multiple depositors.
+/// @notice A basic collateral contract for Wildcat markets that supports multiple depositors.
+///
+///         Users deposit a collateral asset which can be liquidated when the underlying market is in
+///         penalized delinquency. Liquidations are processed through the Bebop PMM by accounts with a
+///         liquidator role managed by the arch-controller owner. The liquidator provides the calldata
+///         for the swap and thus the terms of the swap (minimum output, maximum input, etc.)
+///
+///         Note: This carries the inherent risk that a malicious executor in collaboration with a malicious
+///         maker on Bebop could steal user funds by processing a liquidation at a poor price.
+///
+///         As users make deposits, they are assigned shares equivalent to their deposit amounts.
+///         An additional `liquidationPointsCorrection` value is stored for each user to track the
+///         amount of collateral that has been liquidated from their deposit. This functions similarly
+///         to dividends in other DeFi protocols (e.g. Sushi's MasterChef), except that the dividends
+///         are a debit rather than a credit.
+///
+///         Shares can be withdrawn once the underlying market is terminated, at a rate of one share per
+///         underlying token, with the amount of collateral liquidated from a particular user's deposit
+///         being subtracted from the share amount. Note that since liquidation points are tracked per-user,
+///         shares returned by the `sharesOf` function are not fungible or even guaranteed to be redeemable.
+///         Users who deposit after a given liquidation will still receive 1 share per collateral token deposited,
+///         but will not be debited for the previous liquidations.
+///
+///         The `getLiquidatedCollateral` function can be used to query the amount of collateral that has been
+///         liquidated from a user's deposit.
+///
+///         The `getReclaimableAmount` function can be used to query the amount of collateral that can be reclaimed
+///         by a user once the market is terminated (assuming no further liquidations occur).
 contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     using LibERC20 for address;
     using FunctionTypeCasts for *;
