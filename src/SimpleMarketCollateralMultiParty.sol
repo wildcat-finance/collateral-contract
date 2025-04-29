@@ -34,7 +34,7 @@ struct Depositor {
 ///         to dividends in other DeFi protocols (e.g. Sushi's MasterChef), except that the dividends
 ///         are a debit rather than a credit.
 ///
-///         Shares can be withdrawn once the underlying market is terminated, at a rate of one share per
+///         Shares can be withdrawn once the underlying market is terminated at a rate of one share per
 ///         underlying token, with the amount of collateral liquidated from a particular user's deposit
 ///         being subtracted from the share amount. Note that since liquidation points are tracked per-user,
 ///         shares returned by the `sharesOf` function are not fungible or even guaranteed to be redeemable.
