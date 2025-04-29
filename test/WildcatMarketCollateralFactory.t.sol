@@ -1,44 +1,76 @@
-// SPDX-License-Identifier: Apache-2.0 WITH LicenseRef-Commons-Clause-1.0
-pragma solidity >=0.8.20;
+// // SPDX-License-Identifier: Apache-2.0 WITH LicenseRef-Commons-Clause-1.0
+// pragma solidity >=0.8.20;
 
-import "forge-std/Test.sol";
-import '../src/WildcatMarketCollateralFactory.sol';
-import '../src/WildcatMarketCollateral.sol';
+// import "forge-std/Test.sol";
+// import "../src/WildcatMarketCollateralFactory.sol";
+// import {SimpleMarketCollateral} from "src/SimpleMarketCollateral.sol";
+// import "v2-protocol/libraries/MarketState.sol";
+// import 'solady/tokens/ERC20.sol';
 
-import { MockERC20 } from 'solmate/test/utils/mocks/MockERC20.sol';
+// import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 
-contract MockWildcatMarketTest is IWildcatMarket {}
+// contract MockWildcatMarket {
+//     MarketState internal _state;
 
-// Used to grab the init code storage and hash for the factory constructor
-contract MockMarketCollateral is WildcatMarketCollateral {}
+//     address public borrower;
+//     address public asset;
+//     uint256 public delinquencyGracePeriod;
 
-contract WildcatMarketCollateralFactoryTest is Test {
+//     constructor(
+//         address _borrower,
+//         address _asset,
+//         uint256 _delinquencyGracePeriod
+//     ) {
+//         borrower = _borrower;
+//         asset = _asset;
+//         delinquencyGracePeriod = _delinquencyGracePeriod;
+//     }
 
-  WildcatMarketCollateralFactory mockFactory;
-  MockERC20 mockUnderlying;
-  
-  address admin = address(0x01);
+//     function currentState() public view returns (MarketState memory) {
+//         return _state;
+//     }
 
-  function _storeCollateralInitCode()
-    internal
-    returns (address initCodeStorage, uint256 initCodeHash)
-  {
-    bytes memory collateralInitCode = type(MockMarketCollateral).creationCode;
-    initCodeHash = uint256(keccak256(collateralInitCode));
-    initCodeStorage = LibStoredInitCode.deployInitCode(collateralInitCode);
-  }
+//     function setState(MarketState memory state) public {
+//         _state = state;
+//     }
 
-  function setUp() public {
-    (address initCS, uint initCH) = _storeCollateralInitCode();
-    mockUnderlying = new MockERC20('Token', 'TKN', 18);
+//     function repayAndProcessUnpaidWithdrawalBatches(
+//         uint256 repayAmount,
+//         uint256 maxBatches
+//     ) public {
 
-    // TODO: generate a new market
-    mockFactory = new WildcatMarketCollateralFactory(initCS, initCH);
-  }
+//     }
 
-  function test_blah() public {
-    assertTrue(true);
-  }
+//     function isClosed() public view returns (bool) {
+//         return _state.isClosed;
+//     }
+// }
 
-}
+// contract WildcatMarketCollateralFactoryTest is Test {
+//     WildcatMarketCollateralFactory mockFactory;
+//     MockERC20 mockUnderlying;
 
+//     address admin = address(0x01);
+
+//     function _storeCollateralInitCode()
+//         internal
+//         returns (address initCodeStorage, uint256 initCodeHash)
+//     {
+//         bytes memory collateralInitCode = type(MockMarketCollateral)
+//             .creationCode;
+//         initCodeHash = uint256(keccak256(collateralInitCode));
+//         initCodeStorage = LibStoredInitCode.deployInitCode(collateralInitCode);
+//     }
+
+//     function setUp() public {
+//         (address initCS, uint initCH) = _storeCollateralInitCode();
+//         mockUnderlying = new MockERC20("Token", "TKN", 18);
+
+//         // TODO: generate a new market
+//         mockFactory = new WildcatMarketCollateralFactory(initCS, initCH);
+//     }
+
+//     function test_blah() public {
+//         assertTrue(true);
+//     }
+// }
