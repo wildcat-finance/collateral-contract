@@ -134,13 +134,17 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
     /*                             Collateral Contract                            */
     /* -------------------------------------------------------------------------- */
 
-    function _deposit(address account, uint256 amount) internal assertDoesNotChange(
-        address(collateral),
-        abi.encodeWithSignature("totalLiquidated()"),
-        "totalLiquidated"
+    function _deposit(
+        address account,
+        uint256 amount
     )
-
-     {
+        internal
+        assertDoesNotChange(
+            address(collateral),
+            abi.encodeWithSignature("totalLiquidated()"),
+            "totalLiquidated"
+        )
+    {
         uint256 totalShares = collateral.totalShares();
         uint256 totalDeposited = collateral.totalDeposited();
         uint256 availableCollateral = collateral.availableCollateral();
@@ -632,24 +636,38 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
         _reclaim(address(this), 0, 0, 0);
     }
 
+    struct Result {
+        bool success;
+        bytes returnData;
+    }
+
     modifier assertDoesNotChange(
         address target,
         bytes memory data,
         string memory label
     ) {
-        (bool success, bytes memory returnData) = target.call(data);
+        Result memory result;
+        (result.success, result.returnData) = target.call(data);
         _;
-        (bool success2, bytes memory returnData2) = target.call(data);
+        Result memory result2;
+        (result2.success, result2.returnData) = target.call(data);
         assertEq(
-            success,
-            success2,
+            result.success,
+            result2.success,
             string.concat(label, ": call success changed")
         );
         assertEq(
-            returnData,
-            returnData2,
+            result.returnData,
+            result2.returnData,
             string.concat(label, ": returndata changed")
         );
+    }
+
+    struct StaticValues {
+        uint totalLiquidated;
+        uint totalDeposited;
+        uint liquidatedCollateral;
+        uint liquidationPointsCorrections;
     }
 
     function _reclaim(
@@ -659,7 +677,7 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
         uint256 reclaimAmount
     )
         internal
-        assertDoesNotChange(
+    /*  assertDoesNotChange(
             address(collateral),
             abi.encodeWithSignature("totalLiquidated()"),
             "totalLiquidated"
@@ -681,8 +699,17 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
                 account
             ),
             "liquidationPointsCorrections"
-        )
+        ) */
     {
+        StaticValues memory staticValues;
+        staticValues.totalLiquidated = collateral.totalLiquidated();
+        staticValues.totalDeposited = collateral.totalDeposited();
+        staticValues.liquidatedCollateral = collateral.getLiquidatedCollateral(
+            account
+        );
+        staticValues.liquidationPointsCorrections = collateral
+            .liquidationPointsCorrections(account);
+
         uint256 totalShares = collateral.totalShares();
         uint256 liquidatedCollateral = collateral.getLiquidatedCollateral(
             account
@@ -766,6 +793,26 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
                 "availableCollateral not updated"
             );
         }
+        assertEq(
+            collateral.totalLiquidated(),
+            staticValues.totalLiquidated,
+            "totalLiquidated changed"
+        );
+        assertEq(
+            collateral.totalDeposited(),
+            staticValues.totalDeposited,
+            "totalDeposited changed"
+        );
+        assertEq(
+            collateral.getLiquidatedCollateral(account),
+            staticValues.liquidatedCollateral,
+            "liquidatedCollateral changed"
+        );
+        assertEq(
+            collateral.liquidationPointsCorrections(account),
+            staticValues.liquidationPointsCorrections,
+            "liquidationPointsCorrections changed"
+        );
     }
 
     /* -------------------------------------------------------------------------- */
