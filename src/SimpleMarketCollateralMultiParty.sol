@@ -297,16 +297,14 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
      *      The underlying asset can only be rescued if the market is closed; if the market
      *      is open, any balance in the underlying asset is transferred to the market.
      *
-     *      The collateral asset can be rescued if the balance is greater than the available collateral.
+     *      The collateral asset can be rescued if the balance is greater than the expected available collateral.
      */
     function rescueTokens(address token) public onlyBorrower nonReentrant {
         uint256 tokenBalance = token.balanceOf(address(this));
-        // The collateral asset cannot be rescued.
+        // The collateral asset can only be rescued if the balance is greater than the expected available collateral.
         if (token == collateralAsset) {
             tokenBalance = tokenBalance.satSub(availableCollateral());
-            if (tokenBalance == 0) revert ZeroTokenBalance();
         }
-
         
         if (tokenBalance == 0) revert ZeroTokenBalance();
 
