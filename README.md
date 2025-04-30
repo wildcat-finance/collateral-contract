@@ -13,10 +13,10 @@ This repository contains Solidity smart contracts for collateral management in W
 
 ## SimpleMarketCollateralMultiParty
 
-The `SimpleMarketCollateralMultiParty` contract is a sophisticated collateral management system designed for Wildcat markets with these key features:
+The `SimpleMarketCollateralMultiParty` contract is the core collateral management system designed for Wildcat markets with these key features:
 
 ### Purpose and Design
-A collateral contract that supports multiple depositors providing collateral assets that can be liquidated when the underlying Wildcat market enters a penalized delinquency state. The contract integrates with Bebop PMM (Professional Market Maker) for efficient liquidation processing.
+A collateral contract that supports multiple depositors providing collateral assets that can be liquidated when the underlying Wildcat market enters a penalized delinquency state. The contract integrates with Bebop PMM (Private Market Maker) for efficient liquidation processing.
 
 ### Key Functionality
 
