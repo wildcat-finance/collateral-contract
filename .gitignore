@@ -1,6 +1,14 @@
 # Compiler files
 cache/
 out/
+ir-out/
+ir-cache/
+
+# Node modules
+node_modules/
+
+# Coverage
+coverage/
 
 # Ignores development broadcast logs
 !/broadcast

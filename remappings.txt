@@ -1,0 +1,5 @@
+src/=src/
+forge-std/=lib/forge-std/src/
+openzeppelin/=lib/openzeppelin-contracts/
+solady/=lib/solady/src/
+v2-protocol/=lib/v2-protocol/src/

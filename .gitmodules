@@ -10,3 +10,6 @@
 [submodule "lib/solmate"]
 	path = lib/solmate
 	url = https://github.com/transmissions11/solmate
+[submodule "lib/v2-protocol"]
+	path = lib/v2-protocol
+	url = https://github.com/wildcat-finance/v2-protocol
