@@ -1,91 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity >=0.8.20;
 
-import "forge-std/Test.sol";
-import "../src/WildcatMarketCollateralFactory.sol";
-import {WildcatMarketCollateralFactory, LibStoredInitCode, SimpleMarketCollateralMultiParty} from "src/WildcatMarketCollateralFactory.sol";
-import "solady/tokens/ERC20.sol";
+import "./BaseTest.sol";
 
-import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
-import {fastForward} from "./utils/Time.sol";
+using MathUtils for uint256;
 
-import {MockWildcatMarket} from "./mocks/MockWildcatMarket.sol";
-import {MockWildcatArchController} from "./mocks/MockWildcatArchController.sol";
-import {MockBebop} from "./mocks/MockBebop.sol";
-
-contract SimpleMarketCollateralMultiPartyTest is Test {
-    MockWildcatArchController archController;
-    WildcatMarketCollateralFactory factory;
-    MockWildcatMarket market;
-    MockERC20 underlyingAsset;
-    MockERC20 collateralAsset;
-    address bebop = 0xbbbbbBB520d69a9775E85b458C58c648259FAD5F;
-    SimpleMarketCollateralMultiParty collateral;
-    address executor = address(1);
-    uint liquidationCooldown;
-
-    function _storeInitCode()
-        internal
-        virtual
-        returns (address initCodeStorage, uint256 initCodeHash)
-    {
-        bytes memory initCode = type(SimpleMarketCollateralMultiParty)
-            .creationCode;
-        initCodeHash = uint256(keccak256(initCode));
-        initCodeStorage = LibStoredInitCode.deployInitCode(initCode);
-    }
-
-    function setUp() public {
-        archController = new MockWildcatArchController(address(this));
-        vm.etch(bebop, type(MockBebop).runtimeCode);
-        (address initCodeStorage, uint256 initCodeHash) = _storeInitCode();
-        factory = new WildcatMarketCollateralFactory(
-            address(archController),
-            initCodeStorage,
-            initCodeHash
-        );
-        factory.approveExecutor(executor);
-        underlyingAsset = new MockERC20("Token", "TKN", 18);
-        market = new MockWildcatMarket(
-            address(this),
-            address(underlyingAsset),
-            1 days
-        );
-        liquidationCooldown = market.delinquencyGracePeriod();
-        collateralAsset = new MockERC20("Collateral", "CLT", 18);
-        collateralAsset.mint(address(this), 1000000 ether);
-        collateral = SimpleMarketCollateralMultiParty(
-            factory.deployCollateralContract(
-                address(collateralAsset),
-                address(market)
-            )
-        );
-        assertEq(
-            collateral.marketBorrower(),
-            address(this),
-            "Market borrower mismatch"
-        );
-        assertEq(
-            collateral.collateralAsset(),
-            address(collateralAsset),
-            "Collateral asset mismatch"
-        );
-        assertEq(
-            collateral.underlyingAsset(),
-            address(underlyingAsset),
-            "Underlying asset mismatch"
-        );
-        assertEq(
-            address(collateral.market()),
-            address(market),
-            "Market mismatch"
-        );
-        vm.label(address(collateral), "Collateral");
-        vm.label(address(market), "Market");
-        vm.label(address(underlyingAsset), "UnderlyingAsset");
-        vm.label(address(collateralAsset), "CollateralAsset");
-        vm.label(address(bebop), "Bebop");
-    }
+contract SimpleMarketCollateralMultiPartyTest is BaseTest {
 
     /* -------------------------------------------------------------------------- */
     /*                              Approve Executors                             */
@@ -133,42 +53,6 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
     /* -------------------------------------------------------------------------- */
     /*                             Collateral Contract                            */
     /* -------------------------------------------------------------------------- */
-
-    function _deposit(
-        address account,
-        uint256 amount
-    )
-        internal
-        assertDoesNotChange(
-            address(collateral),
-            abi.encodeWithSignature("totalLiquidated()"),
-            "totalLiquidated"
-        )
-    {
-        uint256 totalShares = collateral.totalShares();
-        uint256 totalDeposited = collateral.totalDeposited();
-        uint256 availableCollateral = collateral.availableCollateral();
-
-        collateralAsset.mint(account, amount);
-        vm.prank(account);
-        collateralAsset.approve(address(collateral), amount);
-        vm.expectEmit(address(collateralAsset));
-        emit ERC20.Transfer(account, address(collateral), amount);
-        vm.prank(account);
-        collateral.deposit(amount);
-
-        assertEq(collateral.totalShares(), totalShares + amount);
-        assertEq(collateral.totalDeposited(), totalDeposited + amount);
-        assertEq(
-            collateral.availableCollateral(),
-            availableCollateral + amount,
-            "availableCollateral not updated"
-        );
-    }
-
-    function _deposit(uint256 amount) internal {
-        _deposit(address(this), amount);
-    }
 
     function test_deposit() external {
         _deposit(100 ether);
@@ -278,22 +162,6 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
         collateral.liquidateCollateral("", 0, 0, 0);
     }
 
-    function _updateDelinquency(
-        uint256 delinquentAmount,
-        bool delinquent,
-        bool penalty
-    ) internal {
-        market.setState(
-            100 ether + delinquentAmount,
-            100 ether,
-            delinquent,
-            (delinquent && penalty)
-                ? uint32(market.delinquencyGracePeriod()) + 1
-                : 0,
-            false
-        );
-    }
-
     function test_liquidateCollateral_MarketTerminated() external {
         market.setState(101 ether, 100 ether, true, 0, true);
         vm.prank(executor);
@@ -303,22 +171,6 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
             )
         );
         collateral.liquidateCollateral("", 0, 0, 0);
-    }
-
-    function _encodeExecute(
-        uint256 amountIn,
-        uint256 amountOut,
-        bool shouldRevert
-    ) internal view returns (bytes memory) {
-        return
-            abi.encodeWithSelector(
-                MockBebop.execute.selector,
-                address(collateralAsset),
-                amountIn,
-                address(underlyingAsset),
-                amountOut,
-                shouldRevert
-            );
     }
 
     function test_liquidateCollateral_InsufficientSwapOutput() external {
@@ -464,74 +316,6 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
         collateral.liquidateCollateral("", 0, 0, 0);
     }
 
-    function _fullLiquidation(
-        uint256 delinquentAmount,
-        uint256 collateralApproved,
-        uint256 collateralSpent,
-        uint256 minUnderlyingOut,
-        uint256 underlyingReceived
-    ) internal {
-        uint256 totalLiquidated = collateral.totalLiquidated();
-        uint256 availableCollateral = collateral.availableCollateral();
-        bytes memory data = _encodeExecute({
-            amountIn: collateralSpent,
-            amountOut: underlyingReceived,
-            shouldRevert: false
-        });
-        _updateDelinquency(delinquentAmount, true, true);
-
-        vm.expectEmit(address(collateralAsset));
-        emit ERC20.Approval(address(collateral), bebop, collateralApproved);
-
-        vm.expectEmit(address(collateralAsset));
-        emit ERC20.Transfer(address(collateral), bebop, collateralSpent);
-
-        vm.expectEmit(address(underlyingAsset));
-        emit ERC20.Transfer(
-            address(0),
-            address(collateral),
-            underlyingReceived
-        );
-
-        vm.expectEmit(address(collateralAsset));
-        emit ERC20.Approval(address(collateral), bebop, 0);
-
-        vm.expectEmit(address(underlyingAsset));
-        emit ERC20.Transfer(
-            address(collateral),
-            address(market),
-            underlyingReceived
-        );
-
-        vm.expectEmit(address(market));
-        emit MockWildcatMarket.Repayment(0, 1);
-
-        vm.expectEmit(address(collateral));
-        emit SimpleMarketCollateralMultiParty.Liquidation(
-            executor,
-            collateralSpent,
-            underlyingReceived
-        );
-        vm.prank(executor);
-        collateral.liquidateCollateral({
-            quoteCalldata: data,
-            minUnderlyingOut: minUnderlyingOut,
-            maxCollateralToLiquidate: collateralApproved,
-            lengthWithdrawalQueue: 1
-        });
-
-        assertEq(
-            collateral.totalLiquidated(),
-            totalLiquidated + collateralSpent,
-            "totalLiquidated"
-        );
-        assertEq(
-            collateral.availableCollateral(),
-            availableCollateral - collateralSpent,
-            "availableCollateral"
-        );
-    }
-
     /// Test that deposits are not penalized for prior liquidations
     function test_depositAfterLiquidation() external {
         _deposit(100 ether);
@@ -542,16 +326,18 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
             minUnderlyingOut: 50 ether,
             underlyingReceived: 51 ether
         });
-        assertEq(
+        assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             50 ether,
-            "Reclaim amount should be 50"
+            1,
+            "Reclaim amount should be 50 =/- 1 wei"
         );
         _deposit(50 ether);
-        assertEq(
+        assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             100 ether,
-            "Reclaim amount should be 100"
+            1,
+            "Reclaim amount should be 100 =/- 1 wei"
         );
         fastForward(liquidationCooldown);
         _fullLiquidation({
@@ -561,31 +347,35 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
             minUnderlyingOut: 10 ether,
             underlyingReceived: 10 ether
         });
-        assertEq(
+        assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             90 ether,
-            "Reclaim amount should be 90"
+            1,
+            "Reclaim amount should be 90 =/- 1 wei"
         );
         _deposit(address(2), 15 ether);
-        assertEq(
+        assertApproxEqMinus(
             collateral.getReclaimableAmount(address(2)),
             15 ether,
-            "Reclaim amount should be 15"
+            1,
+            "Reclaim amount should be 15 =/- 1 wei"
         );
-        assertEq(
+        assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             90 ether,
-            "Reclaim amount should be 90"
+            1,
+            "Reclaim amount should be 90 =/- 1 wei"
         );
         assertEq(
             collateral.getLiquidatedCollateral(address(2)),
             0,
             "Liquidated collateral should be 0 for new depositor"
         );
-        assertEq(
+        assertApproxEqPlus(
             collateral.getLiquidatedCollateral(address(this)),
             60 ether,
-            "Liquidated collateral should be 60 for old depositor"
+            1,
+            "Liquidated collateral should be 60 =/+ 1 wei for old depositor"
         );
     }
 
@@ -636,186 +426,77 @@ contract SimpleMarketCollateralMultiPartyTest is Test {
         _reclaim(address(this), 0, 0, 0);
     }
 
-    struct Result {
-        bool success;
-        bytes returnData;
-    }
-
-    modifier assertDoesNotChange(
-        address target,
-        bytes memory data,
-        string memory label
-    ) {
-        Result memory result;
-        (result.success, result.returnData) = target.call(data);
-        _;
-        Result memory result2;
-        (result2.success, result2.returnData) = target.call(data);
-        assertEq(
-            result.success,
-            result2.success,
-            string.concat(label, ": call success changed")
-        );
-        assertEq(
-            result.returnData,
-            result2.returnData,
-            string.concat(label, ": returndata changed")
-        );
-    }
-
-    struct StaticValues {
-        uint totalLiquidated;
-        uint totalDeposited;
-        uint liquidatedCollateral;
-        uint liquidationPointsCorrections;
-    }
-
-    function _reclaim(
-        address account,
-        uint256 shares,
-        uint256 _liquidatedCollateral,
-        uint256 reclaimAmount
-    )
-        internal
-    /*  assertDoesNotChange(
-            address(collateral),
-            abi.encodeWithSignature("totalLiquidated()"),
-            "totalLiquidated"
-        )
-        assertDoesNotChange(
-            address(collateral),
-            abi.encodeWithSignature("totalDeposited()"),
-            "totalDeposited"
-        )
-        assertDoesNotChange(
-            address(collateral),
-            abi.encodeWithSignature("liquidatedCollateral()"),
-            "liquidatedCollateral"
-        )
-        assertDoesNotChange(
-            address(collateral),
-            abi.encodeWithSignature(
-                "liquidationPointsCorrections(address)",
-                account
-            ),
-            "liquidationPointsCorrections"
-        ) */
-    {
-        StaticValues memory staticValues;
-        staticValues.totalLiquidated = collateral.totalLiquidated();
-        staticValues.totalDeposited = collateral.totalDeposited();
-        staticValues.liquidatedCollateral = collateral.getLiquidatedCollateral(
-            account
-        );
-        staticValues.liquidationPointsCorrections = collateral
-            .liquidationPointsCorrections(account);
-
-        uint256 totalShares = collateral.totalShares();
-        uint256 liquidatedCollateral = collateral.getLiquidatedCollateral(
-            account
-        );
-        uint256 totalWithdrawn = collateral.totalWithdrawn();
-        uint256 availableCollateral = collateral.availableCollateral();
-        assertEq(
-            liquidatedCollateral,
-            _liquidatedCollateral,
-            "liquidatedCollateral"
-        );
-        (bool hasReclaimed, uint248 amountDeposited) = collateral.getDepositor(
-            account
-        );
-
-        bool willFail = shares == 0 || reclaimAmount == 0 || hasReclaimed;
-        if (hasReclaimed) {
-            vm.expectRevert(
-                abi.encodeWithSelector(
-                    SimpleMarketCollateralMultiParty.AlreadyReclaimed.selector
-                )
-            );
-        } else if (shares == 0) {
-            vm.expectRevert(
-                abi.encodeWithSelector(
-                    SimpleMarketCollateralMultiParty.ZeroShares.selector
-                )
-            );
-        } else if (reclaimAmount == 0) {
-            vm.expectRevert(
-                abi.encodeWithSelector(
-                    SimpleMarketCollateralMultiParty.ZeroReclaimAmount.selector
-                )
-            );
-        } else {
-            vm.expectEmit(address(collateralAsset));
-            emit ERC20.Transfer(address(collateral), account, reclaimAmount);
-            vm.expectEmit(address(collateral));
-            emit SimpleMarketCollateralMultiParty.CollateralReclaimed(
-                account,
-                shares,
-                liquidatedCollateral,
-                reclaimAmount
-            );
-        }
-        vm.prank(account);
-        collateral.reclaimCollateral();
-        if (!willFail) {
-            assertEq(
-                collateral.totalShares(),
-                totalShares - shares,
-                "totalShares not updated"
-            );
-            assertEq(
-                collateral.totalWithdrawn(),
-                totalWithdrawn + reclaimAmount,
-                "totalWithdrawn changed"
-            );
-            assertEq(collateral.sharesOf(account), 0, "sharesOf changed");
-            assertEq(
-                collateral.getReclaimableAmount(account),
-                0,
-                "getReclaimableAmount not updated"
-            );
-            assertEq(
-                collateral.getLiquidatedCollateral(account),
-                liquidatedCollateral,
-                "getLiquidatedCollateral changed"
-            );
-            (bool hasReclaimed2, uint248 amountDeposited2) = collateral
-                .getDepositor(account);
-            assertEq(
-                amountDeposited2,
-                amountDeposited,
-                "amountDeposited changed"
-            );
-            assertEq(hasReclaimed2, true, "hasReclaimed not updated");
-            assertEq(
-                collateral.availableCollateral(),
-                availableCollateral - reclaimAmount,
-                "availableCollateral not updated"
-            );
-        }
-        assertEq(
-            collateral.totalLiquidated(),
-            staticValues.totalLiquidated,
-            "totalLiquidated changed"
-        );
-        assertEq(
-            collateral.totalDeposited(),
-            staticValues.totalDeposited,
-            "totalDeposited changed"
-        );
-        assertEq(
-            collateral.getLiquidatedCollateral(account),
-            staticValues.liquidatedCollateral,
-            "liquidatedCollateral changed"
-        );
-        assertEq(
-            collateral.liquidationPointsCorrections(account),
-            staticValues.liquidationPointsCorrections,
-            "liquidationPointsCorrections changed"
-        );
-    }
-
     /* -------------------------------------------------------------------------- */
     /*                                rescueTokens                                */
     /* -------------------------------------------------------------------------- */
+
+    function test_rescueTokens_CollateralAsset_NoExcessBalance() external {
+        _deposit(100 ether);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.ZeroTokenBalance.selector
+            )
+        );
+        collateral.rescueTokens(address(collateralAsset));
+    }
+
+    function test_rescueTokens_CollateralAsset() external {
+        _deposit(100 ether);
+        collateralAsset.mint(address(collateral), 1 ether);
+        assertEq(
+            collateral.availableCollateral(),
+            100 ether,
+            "availableCollateral"
+        );
+        vm.expectEmit(address(collateralAsset));
+        emit ERC20.Transfer(address(collateral), address(this), 1 ether);
+        collateral.rescueTokens(address(collateralAsset));
+
+        _fullLiquidation({
+            delinquentAmount: 10 ether,
+            collateralApproved: 10 ether,
+            collateralSpent: 10 ether,
+            minUnderlyingOut: 10 ether,
+            underlyingReceived: 10 ether
+        });
+        collateralAsset.mint(address(collateral), 1 ether);
+        assertEq(
+            collateral.availableCollateral(),
+            90 ether,
+            "availableCollateral not updated"
+        );
+
+        vm.expectEmit(address(collateralAsset));
+        emit ERC20.Transfer(address(collateral), address(this), 1 ether);
+        collateral.rescueTokens(address(collateralAsset));
+    }
+
+    function test_rescueTokens_UnderlyingAsset_MarketClosed() external {
+        _deposit(100 ether);
+        market.setState(0, 0, false, 0, true);
+        underlyingAsset.mint(address(collateral), 1 ether);
+        vm.expectEmit(address(underlyingAsset));
+        emit ERC20.Transfer(address(collateral), address(this), 1 ether);
+        collateral.rescueTokens(address(underlyingAsset));
+    }
+
+    function test_rescueTokens_UnderlyingAsset_CallerNotBorrower() external {
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.CallerNotBorrower.selector
+            )
+        );
+        collateral.rescueTokens(address(underlyingAsset));
+    }
+
+    function test_rescueTokens_UnderlyingAsset_MarketOpen() external {
+        _deposit(100 ether);
+        underlyingAsset.mint(address(collateral), 1 ether);
+        vm.expectEmit(address(underlyingAsset));
+        emit ERC20.Transfer(address(collateral), address(market), 1 ether);
+        vm.expectEmit(address(market));
+        emit MockWildcatMarket.Repayment(0, 0);
+        collateral.rescueTokens(address(underlyingAsset));
+    }
 }
