@@ -41,6 +41,11 @@ struct Depositor {
 ///         Users who deposit after a given liquidation will still receive 1 share per collateral token deposited,
 ///         but will not be debited for the previous liquidations.
 ///
+///         Liquidation points are always rounded up to ensure depositors are never debited less than their proportional
+///         share of liquidated collateral, as that could lead to a situation where the collateral contract is insolvent.
+///         The trade-off is that depositors may be debited a few wei more than they should be, which should be negligible
+///         for all realistic use-cases (i.e. assuming dust of the collateral asset is effectively worthless).
+///
 ///         The `getLiquidatedCollateral` function can be used to query the amount of collateral that has been
 ///         liquidated from a user's deposit.
 ///
@@ -305,7 +310,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         if (token == collateralAsset) {
             tokenBalance = tokenBalance.satSub(availableCollateral());
         }
-        
+
         if (tokenBalance == 0) revert ZeroTokenBalance();
 
         // The liquidation process will always repay 100% of underlying assets received from bebop;
@@ -416,9 +421,10 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         );
 
         /// @dev Update the liquidation points per share to account for the collateral liquidated
-        liquidationPointsPerShare +=
-            (collateralLiquidated * POINTS_MULTIPLIER) /
-            totalShares;
+        liquidationPointsPerShare += divUp(
+            collateralLiquidated * POINTS_MULTIPLIER,
+            totalShares
+        );
         totalLiquidated += collateralLiquidated.toUint248();
     }
 
@@ -485,7 +491,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
             liquidationPoints,
             POINTS_MULTIPLIER
         );
-        return _shares - liquidatedCollateral;
+        return _shares.satSub(liquidatedCollateral);
     }
 
     /// @dev Returns `ceil(x / d)`.
