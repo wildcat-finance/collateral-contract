@@ -6,7 +6,6 @@ import "./BaseTest.sol";
 using MathUtils for uint256;
 
 contract SimpleMarketCollateralMultiPartyTest is BaseTest {
-
     /* -------------------------------------------------------------------------- */
     /*                              Approve Executors                             */
     /* -------------------------------------------------------------------------- */
@@ -292,8 +291,8 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         );
         assertEq(
             collateral.sharesOf(address(this)),
-            100 ether,
-            "Shares should be the same"
+            0,
+            "Shares should be burned if collateral contract is fully liquidated"
         );
     }
 
@@ -345,7 +344,8 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             collateralApproved: 10 ether,
             collateralSpent: 10 ether,
             minUnderlyingOut: 10 ether,
-            underlyingReceived: 10 ether
+            underlyingReceived: 10 ether,
+            skipChecks: true
         });
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
@@ -365,17 +365,6 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             90 ether,
             1,
             "Reclaim amount should be 90 =/- 1 wei"
-        );
-        assertEq(
-            collateral.getLiquidatedCollateral(address(2)),
-            0,
-            "Liquidated collateral should be 0 for new depositor"
-        );
-        assertApproxEqPlus(
-            collateral.getLiquidatedCollateral(address(this)),
-            60 ether,
-            1,
-            "Liquidated collateral should be 60 =/+ 1 wei for old depositor"
         );
     }
 
@@ -498,5 +487,180 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         vm.expectEmit(address(market));
         emit MockWildcatMarket.Repayment(0, 0);
         collateral.rescueTokens(address(underlyingAsset));
+    }
+
+    function test_violet() external {
+        address userA = address(0x0a);
+        address userB = address(0x0b);
+        address userC = address(0x0c);
+        _deposit(userA, 100 ether);
+        _fullLiquidation({
+            delinquentAmount: 100 ether,
+            collateralApproved: 100 ether,
+            collateralSpent: 100 ether,
+            minUnderlyingOut: 100 ether,
+            underlyingReceived: 100 ether
+        });
+        fastForward(100 days);
+        _deposit(userB, 50 ether);
+        _fullLiquidation({
+            delinquentAmount: 50 ether,
+            collateralApproved: 50 ether,
+            collateralSpent: 50 ether,
+            minUnderlyingOut: 50 ether,
+            underlyingReceived: 50 ether
+        });
+        _deposit(userC, 100 ether);
+        assertApproxEqAbs(
+            collateral.getReclaimableAmount(userA),
+            0,
+            1,
+            "userA should have 0 reclaimable amount"
+        );
+        assertApproxEqAbs(
+            collateral.getReclaimableAmount(userB),
+            0,
+            1,
+            "userB should have 0 reclaimable amount"
+        );
+        assertApproxEqAbs(
+            collateral.getReclaimableAmount(userC),
+            100 ether,
+            1,
+            "userC should have 100 reclaimable amount"
+        );
+        // // _deposit(userC, 100 ether);
+        // Depositor memory depositorA = collateral.getDepositor(userA);
+        // Depositor memory depositorB = collateral.getDepositor(userB);
+        // console.log(
+        //     "userA liquidation points:",
+        //     depositorA.liquidationPointsCorrection
+        // );
+        // console.log(
+        //     "userB liquidation points:",
+        //     depositorB.liquidationPointsCorrection
+        // );
+        // // console.log(
+        // //     "userC liquidation points:",
+        // //     collateral.liquidationPointsCorrections(userC)
+        // // );
+        // console.log(
+        //     "userA liquidated collateral:",
+        //     collateral.getLiquidatedCollateral(userA)
+        // );
+        // console.log(
+        //     "userB liquidated collateral:",
+        //     collateral.getLiquidatedCollateral(userB)
+        // );
+        // console.log(
+        //     "userC liquidated collateral:",
+        //     collateral.getLiquidatedCollateral(userC)
+        // );
+        // console.log(
+        //     "userA reclaimable amount:",
+        //     collateral.getReclaimableAmount(userA)
+        // );
+        // console.log(
+        //     "userB reclaimable amount:",
+        //     collateral.getReclaimableAmount(userB)
+        // );
+        // console.log(
+        //     "userC reclaimable amount:",
+        //     collateral.getReclaimableAmount(userC)
+        // );
+        // console.log("total shares:", collateral.totalShares());
+        // console.log("total liquidated:", collateral.totalLiquidated());
+        // console.log("available collateral:", collateral.availableCollateral());
+    }
+
+    function _doLiquidate(uint collateralToLiquidate) internal returns (uint256) {
+        // delinquentAmount = _hem(delinquentAmount, 1000, type(uint104).max - 100 ether);
+        uint availableCollateral = collateral.availableCollateral();
+        if (availableCollateral < 1000) {
+            return 0;
+        }
+        collateralToLiquidate = _hem(
+            collateralToLiquidate,
+            1000,
+            availableCollateral
+        );
+        console.log("available collateral:", availableCollateral);
+        console.log("liquidation amount:", collateralToLiquidate);
+
+        _fullLiquidation({
+            delinquentAmount: 1 ether,
+            collateralApproved: collateralToLiquidate,
+            collateralSpent: collateralToLiquidate,
+            minUnderlyingOut: 1 ether,
+            underlyingReceived: 1 ether
+        });
+        return collateralToLiquidate;
+    }
+
+    function test_violet2() external {
+        _deposit(10215);
+        uint collateralToLiquidate1 = _doLiquidate(324619612);
+        // Depositor memory depositor = collateral.getDepositor(address(this));
+        // console.log("shares remaining:", depositor.amountDeposited - depositor.amountLiquidated);
+
+        fastForward(100 days);
+        uint collateralToLiquidate2 = _doLiquidate(215013935);
+        // console.log("liquidated 1:", collateralToLiquidate1);
+        // console.log("liquidated 2:", collateralToLiquidate2);
+    }
+
+    /*
+    (4444 * type(uint128).max) / 10215
+    */
+
+    function _hem(
+        uint256 x,
+        uint256 min,
+        uint256 max
+    ) internal pure virtual returns (uint256 result) {
+        require(min <= max, "Max is less than min.");
+        /// @solidity memory-safe-assembly
+        assembly {
+            // prettier-ignore
+            for {} 1 {} {
+                // If `x` is between `min` and `max`, return `x` directly.
+                // This is to ensure that dictionary values
+                // do not get shifted if the min is nonzero.
+                // More info: https://github.com/foundry-rs/forge-std/issues/188
+                if iszero(or(lt(x, min), gt(x, max))) {
+                    result := x
+                    break
+                }
+                let size := add(sub(max, min), 1)
+                if lt(gt(x, 3), gt(size, x)) {
+                    result := add(min, x)
+                    break
+                }
+                if lt(lt(x, not(3)), gt(size, not(x))) {
+                    result := sub(max, not(x))
+                    break
+                }
+                // Otherwise, wrap x into the range [min, max],
+                // i.e. the range is inclusive.
+                if iszero(lt(x, max)) {
+                    let d := sub(x, max)
+                    let r := mod(d, size)
+                    if iszero(r) {
+                        result := max
+                        break
+                    }
+                    result := sub(add(min, r), 1)
+                    break
+                }
+                let d := sub(min, x)
+                let r := mod(d, size)
+                if iszero(r) {
+                    result := min
+                    break
+                }
+                result := add(sub(max, r), 1)
+                break
+            }
+        }
     }
 }

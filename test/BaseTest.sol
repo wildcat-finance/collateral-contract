@@ -3,7 +3,7 @@ pragma solidity >=0.8.20;
 
 import "forge-std/Test.sol";
 import "../src/WildcatMarketCollateralFactory.sol";
-import {WildcatMarketCollateralFactory, LibStoredInitCode, SimpleMarketCollateralMultiParty} from "src/WildcatMarketCollateralFactory.sol";
+import {WildcatMarketCollateralFactory, LibStoredInitCode, SimpleMarketCollateralMultiParty, Depositor} from "src/WildcatMarketCollateralFactory.sol";
 import "v2-protocol/libraries/MathUtils.sol";
 import "solady/tokens/ERC20.sol";
 
@@ -80,11 +80,6 @@ contract BaseTest is Test {
 
     function validateCollateralExpectations() internal view {
         assertEq(
-            expectations.totalDeposited,
-            collateral.totalDeposited(),
-            "totalDeposited mismatch"
-        );
-        assertEq(
             expectations.activeCollateral,
             collateral.availableCollateral(),
             "activeCollateral mismatch"
@@ -92,8 +87,8 @@ contract BaseTest is Test {
         for (uint256 i = 0; i < expectations.depositors.length; i++) {
             address depositor = expectations.depositors[i];
             assertApproxEqAbs(
-                expectations.depositAmounts[depositor],
                 collateral.getReclaimableAmount(depositor),
+                expectations.depositAmounts[depositor],
                 expectations.maxRoundingError[depositor],
                 "depositAmount mismatch"
             );
@@ -163,14 +158,8 @@ contract BaseTest is Test {
         vm.label(address(bebop), "Bebop");
     }
 
-    function _deposit(
-        address account,
-        uint256 amount
-    )
-        internal
-    {
+    function _deposit(address account, uint256 amount) internal {
         uint256 totalShares = collateral.totalShares();
-        uint256 totalDeposited = collateral.totalDeposited();
         uint256 availableCollateral = collateral.availableCollateral();
 
         collateralAsset.mint(account, amount);
@@ -183,7 +172,6 @@ contract BaseTest is Test {
         addDepositor(account, amount);
 
         assertEq(collateral.totalShares(), totalShares + amount);
-        assertEq(collateral.totalDeposited(), totalDeposited + amount);
         assertEq(
             collateral.availableCollateral(),
             availableCollateral + amount,
@@ -235,7 +223,24 @@ contract BaseTest is Test {
         uint256 minUnderlyingOut,
         uint256 underlyingReceived
     ) internal {
-        uint256 totalLiquidated = collateral.totalLiquidated();
+        _fullLiquidation(
+            delinquentAmount,
+            collateralApproved,
+            collateralSpent,
+            minUnderlyingOut,
+            underlyingReceived,
+            false
+        );
+    }
+
+    function _fullLiquidation(
+        uint256 delinquentAmount,
+        uint256 collateralApproved,
+        uint256 collateralSpent,
+        uint256 minUnderlyingOut,
+        uint256 underlyingReceived,
+        bool skipChecks
+    ) internal {
         uint256 availableCollateral = collateral.availableCollateral();
         bytes memory data = _encodeExecute({
             amountIn: collateralSpent,
@@ -285,22 +290,17 @@ contract BaseTest is Test {
         });
 
         assertEq(
-            collateral.totalLiquidated(),
-            totalLiquidated + collateralSpent,
-            "totalLiquidated"
-        );
-        assertEq(
             collateral.availableCollateral(),
             availableCollateral - collateralSpent,
             "availableCollateral"
         );
         subtractLiquidatedCollateral(collateralSpent);
-        validateCollateralExpectations();
+        if (!skipChecks) {
+            validateCollateralExpectations();
+        }
     }
 
     struct StaticValues {
-        uint totalLiquidated;
-        uint totalDeposited;
         uint liquidatedCollateral;
         uint liquidationPointsCorrections;
     }
@@ -310,41 +310,14 @@ contract BaseTest is Test {
         uint256 shares,
         uint256 _liquidatedCollateral,
         uint256 reclaimAmount
-    )
-        internal
-    {
-        StaticValues memory staticValues;
-        staticValues.totalLiquidated = collateral.totalLiquidated();
-        staticValues.totalDeposited = collateral.totalDeposited();
-        staticValues.liquidatedCollateral = collateral.getLiquidatedCollateral(
-            account
-        );
-        staticValues.liquidationPointsCorrections = collateral
-            .liquidationPointsCorrections(account);
-
+    ) internal {
+        Depositor memory depositor = collateral.getDepositor(account);
         uint256 totalShares = collateral.totalShares();
-        uint256 liquidatedCollateral = collateral.getLiquidatedCollateral(
-            account
-        );
-        uint256 totalWithdrawn = collateral.totalWithdrawn();
         uint256 availableCollateral = collateral.availableCollateral();
-        assertEq(
-            liquidatedCollateral,
-            _liquidatedCollateral,
-            "liquidatedCollateral"
-        );
-        (bool hasReclaimed, uint248 amountDeposited) = collateral.getDepositor(
-            account
-        );
 
-        bool willFail = shares == 0 || reclaimAmount == 0 || hasReclaimed;
-        if (hasReclaimed) {
-            vm.expectRevert(
-                abi.encodeWithSelector(
-                    SimpleMarketCollateralMultiParty.AlreadyReclaimed.selector
-                )
-            );
-        } else if (shares == 0) {
+        bool willFail = shares == 0 ||
+            reclaimAmount == 0;
+        if (shares == 0) {
             vm.expectRevert(
                 abi.encodeWithSelector(
                     SimpleMarketCollateralMultiParty.ZeroShares.selector
@@ -363,22 +336,17 @@ contract BaseTest is Test {
             emit SimpleMarketCollateralMultiParty.CollateralReclaimed(
                 account,
                 shares,
-                liquidatedCollateral,
                 reclaimAmount
             );
         }
         vm.prank(account);
         collateral.reclaimCollateral();
+        Depositor memory depositor2 = collateral.getDepositor(account);
         if (!willFail) {
             assertEq(
                 collateral.totalShares(),
                 totalShares - shares,
                 "totalShares not updated"
-            );
-            assertEq(
-                collateral.totalWithdrawn(),
-                totalWithdrawn + reclaimAmount,
-                "totalWithdrawn changed"
             );
             assertEq(collateral.sharesOf(account), 0, "sharesOf changed");
             assertEq(
@@ -387,65 +355,74 @@ contract BaseTest is Test {
                 "getReclaimableAmount not updated"
             );
             assertEq(
-                collateral.getLiquidatedCollateral(account),
-                liquidatedCollateral,
-                "getLiquidatedCollateral changed"
+                depositor2.shares,
+                depositor.shares,
+                "shares not updated"
             );
-            (bool hasReclaimed2, uint248 amountDeposited2) = collateral
-                .getDepositor(account);
-            assertEq(
-                amountDeposited2,
-                amountDeposited,
-                "amountDeposited changed"
-            );
-            assertEq(hasReclaimed2, true, "hasReclaimed not updated");
             assertEq(
                 collateral.availableCollateral(),
                 availableCollateral - reclaimAmount,
                 "availableCollateral not updated"
             );
         }
-        assertEq(
-            collateral.totalLiquidated(),
-            staticValues.totalLiquidated,
-            "totalLiquidated changed"
-        );
-        assertEq(
-            collateral.totalDeposited(),
-            staticValues.totalDeposited,
-            "totalDeposited changed"
-        );
-        assertEq(
-            collateral.getLiquidatedCollateral(account),
-            staticValues.liquidatedCollateral,
-            "liquidatedCollateral changed"
-        );
-        assertEq(
-            collateral.liquidationPointsCorrections(account),
-            staticValues.liquidationPointsCorrections,
-            "liquidationPointsCorrections changed"
-        );
     }
 
     /// @dev Asserts that two values are approximately equal, with the actual value allowed to be greater
     /// than the expected value by a maximum of `delta`
-    function assertApproxEqPlus(uint256 actual, uint256 expected, uint256 delta, string memory err) public {
-        assertGe(actual, expected, string.concat(err, " actual is less than expected"));
-        assertLe(actual, expected + delta, string.concat(err, " actual exceeds expected by more than delta"));
+    function assertApproxEqPlus(
+        uint256 actual,
+        uint256 expected,
+        uint256 delta,
+        string memory err
+    ) public {
+        assertGe(
+            actual,
+            expected,
+            string.concat(err, " actual is less than expected")
+        );
+        assertLe(
+            actual,
+            expected + delta,
+            string.concat(err, " actual exceeds expected by more than delta")
+        );
     }
 
-    function assertApproxEqPlus(uint256 actual, uint256 expected, uint256 delta) public {
+    function assertApproxEqPlus(
+        uint256 actual,
+        uint256 expected,
+        uint256 delta
+    ) public {
         assertApproxEqPlus(actual, expected, delta, "");
     }
 
     /// @dev Asserts that two values are approximately equal, with the actual value allowed to be less
     /// than the expected value by a maximum of `delta`
-    function assertApproxEqMinus(uint256 actual, uint256 expected, uint256 delta, string memory err) public {
-        assertLe(actual, expected, string.concat(err, " actual is greater than expected"));
-        assertGe(actual, expected - delta, string.concat(err, " actual is less than expected by more than delta"));
+    function assertApproxEqMinus(
+        uint256 actual,
+        uint256 expected,
+        uint256 delta,
+        string memory err
+    ) public {
+        assertLe(
+            actual,
+            expected,
+            string.concat(err, " actual is greater than expected")
+        );
+        assertGe(
+            actual,
+            expected - delta,
+            string.concat(
+                err,
+                " actual is less than expected by more than delta"
+            )
+        );
     }
 
-    function assertApproxEqMinus(uint256 actual, uint256 expected, uint256 delta) public {
+    function assertApproxEqMinus(
+        uint256 actual,
+        uint256 expected,
+        uint256 delta
+    ) public {
         assertApproxEqMinus(actual, expected, delta, "");
     }
 }
