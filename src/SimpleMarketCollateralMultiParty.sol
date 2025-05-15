@@ -43,29 +43,23 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     uint32 public lastFullLiquidationDepositIndex;
     uint32 public nextDepositIndex;
 
-    // mapping(address account => uint256 shares) public sharesOf;
     mapping(address account => Depositor depositor) internal _depositors;
 
     function _getDepositor(
         address account
     ) internal returns (Depositor storage depositor) {
         depositor = _depositors[account];
-        if (depositor.lastDepositIndex < lastFullLiquidationDepositIndex) {
+        if (depositor.lastDepositIndex <= lastFullLiquidationDepositIndex) {
             emit LiquidatedSharesReset(account, depositor.shares);
             depositor.shares = 0;
             depositor.lastDepositIndex = 0;
         }
     }
 
-    /**
-     * @dev Returns the active shares of an account. Note that once an account
-     *      has withdrawn, this function will return 0 but the `amountDeposited` value
-     *      will still be stored in the `_depositors` mapping for post-withdrawal
-     *      queries about the account's deposited & liquidated collateral.
-     */
+    /// @dev Returns the active shares of an account.
     function sharesOf(address account) public view returns (uint256) {
         Depositor memory depositor = _depositors[account];
-        if (depositor.lastDepositIndex < lastFullLiquidationDepositIndex) {
+        if (depositor.lastDepositIndex <= lastFullLiquidationDepositIndex) {
             return 0;
         }
         return depositor.shares;
@@ -75,7 +69,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         address account
     ) public view returns (Depositor memory depositor) {
         depositor = _depositors[account];
-        if (depositor.lastDepositIndex < lastFullLiquidationDepositIndex) {
+        if (depositor.lastDepositIndex <= lastFullLiquidationDepositIndex) {
             depositor.shares = 0;
             depositor.lastDepositIndex = 0;
         }
@@ -251,7 +245,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         uint256 depositAmount = _amount.toUint248();
         uint224 shares = (
-            availableCollateral == 0
+            (availableCollateral == 0 || totalShares == 0)
                 ? depositAmount
                 : FixedPointMathLib.fullMulDiv(
                     depositAmount,
@@ -269,7 +263,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         Depositor storage depositor = _getDepositor(msg.sender);
         depositor.shares += shares;
-        depositor.lastDepositIndex = nextDepositIndex++;
+        depositor.lastDepositIndex = ++nextDepositIndex;
         totalShares += shares;
         availableCollateral += depositAmount;
 
@@ -410,7 +404,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         availableCollateral -= collateralLiquidated;
 
-        // If the contract has no available collateral, reset the shares and last liquidation timestamp
+        // If the contract has no available collateral, reset the shares and last liquidated deposit index
         // to avoid inflating the share price of future deposits. Any deposits prior to the last full
         // liquidation will have their shares reset to 0.
         if (availableCollateral == 0) {
@@ -436,6 +430,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         depositor.shares = 0;
         totalShares -= shares;
+        availableCollateral -= reclaimAmount;
 
         collateralAsset.safeTransfer(msg.sender, reclaimAmount);
 
