@@ -318,6 +318,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
     /// Test that deposits are not penalized for prior liquidations
     function test_depositAfterLiquidation() external {
         _deposit(100 ether);
+        console.log("Step 1");
         _fullLiquidation({
             delinquentAmount: 100 ether,
             collateralApproved: 100 ether,
@@ -325,6 +326,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             minUnderlyingOut: 50 ether,
             underlyingReceived: 51 ether
         });
+        console.log("Step 2");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             50 ether,
@@ -332,6 +334,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             "Reclaim amount should be 50 =/- 1 wei"
         );
         _deposit(50 ether);
+        console.log("Step 3");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             100 ether,
@@ -347,6 +350,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             underlyingReceived: 10 ether,
             skipChecks: true
         });
+        console.log("Step 4");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             90 ether,
@@ -354,6 +358,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             "Reclaim amount should be 90 =/- 1 wei"
         );
         _deposit(address(2), 15 ether);
+        console.log("Step 5");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(2)),
             15 ether,
@@ -403,7 +408,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             underlyingReceived: 100 ether
         });
         market.setState(0, 0, false, 0, true);
-        _reclaim(address(this), 100 ether, 100 ether, 0);
+        _reclaim(address(this), 0, 100 ether, 0);
     }
 
     function test_reclaimCollateral_ZeroReclaimAmount_AlreadyReclaimed()
@@ -573,7 +578,33 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         // console.log("available collateral:", collateral.availableCollateral());
     }
 
-    function _doLiquidate(uint collateralToLiquidate) internal returns (uint256) {
+    function test_invariantResult() external {
+        _deposit(
+            0x760c0c4C0291fDd86F383Dc81A2E563c2090805A,
+            35023802776561736204669
+        );
+        _fullLiquidation({
+            delinquentAmount: 35023802776561736204669,
+            collateralApproved: 35023802776561736204669,
+            collateralSpent: 35023802776561736204669,
+            minUnderlyingOut: 35023802776561736204669,
+            underlyingReceived: 35023802776561736204669
+        });
+        _deposit(0x760c0c4C0291fDd86F383Dc81A2E563c2090805A, 1044352882);
+        uint shares = collateral.sharesOf(
+            0x760c0c4C0291fDd86F383Dc81A2E563c2090805A
+        );
+        uint shares2 = collateral
+            .getDepositor(0x760c0c4C0291fDd86F383Dc81A2E563c2090805A)
+            .shares;
+        assertEq(shares, shares2, "shares not updated");
+        uint totalShares = collateral.totalShares();
+        assertEq(totalShares, shares, "total shares not eq shares");
+    }
+
+    function _doLiquidate(
+        uint collateralToLiquidate
+    ) internal returns (uint256) {
         // delinquentAmount = _hem(delinquentAmount, 1000, type(uint104).max - 100 ether);
         uint availableCollateral = collateral.availableCollateral();
         if (availableCollateral < 1000) {

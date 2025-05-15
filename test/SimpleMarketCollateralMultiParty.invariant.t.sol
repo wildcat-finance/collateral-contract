@@ -271,7 +271,7 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is BaseTest {
             address depositor = expectations.depositors[i];
             assertApproxEqAbs(
                 collateral.getReclaimableAmount(depositor),
-                expectations.depositAmounts[depositor],
+                getShareValue(depositor),
                 expectations.maxRoundingError[depositor],
                 "Reclaimable amount should match expectations"
             );
@@ -312,7 +312,7 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is BaseTest {
         for (uint256 i = 0; i < expectations.depositors.length; i++) {
             address depositor = expectations.depositors[i];
             uint256 actual = collateral.getReclaimableAmount(depositor);
-            uint256 expected = expectations.depositAmounts[depositor];
+            uint256 expected = getShareValue(depositor);
             assertLe(
                 actual,
                 expected,

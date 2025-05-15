@@ -19,11 +19,12 @@ using MathUtils for uint256;
 
 struct CollateralExpectations {
     address[] depositors;
-    mapping(address => uint256) depositAmounts;
+    mapping(address => bool) hasDeposited;
+    mapping(address => uint256) shares;
     mapping(address => uint256) liquidatedAmounts;
     // Increase by 1 each time a liquidation is performed
     mapping(address => uint256) maxRoundingError;
-    uint256 totalDeposited;
+    uint256 totalShares;
     uint256 activeCollateral;
 }
 
@@ -41,41 +42,55 @@ contract BaseTest is Test {
 
     function addDepositor(address depositor, uint256 depositAmount) public {
         if (
-            expectations.depositAmounts[depositor] == 0 &&
-            expectations.liquidatedAmounts[depositor] == 0
+            !expectations.hasDeposited[depositor]
         ) {
             expectations.depositors.push(depositor);
+            expectations.hasDeposited[depositor] = true;
         }
-        expectations.depositAmounts[depositor] += depositAmount;
-        expectations.totalDeposited += depositAmount;
+        uint256 shares = expectations.totalShares == 0
+            ? depositAmount
+            : FixedPointMathLib.fullMulDiv(
+                depositAmount,
+                expectations.totalShares,
+                expectations.activeCollateral
+            );
+        expectations.shares[depositor] += shares;
+        expectations.totalShares += shares;
         expectations.activeCollateral += depositAmount;
     }
 
-    function subtractLiquidatedCollateral(uint256 liquidatedCollateral) public {
-        for (uint256 i = 0; i < expectations.depositors.length; i++) {
-            address depositor = expectations.depositors[i];
-            uint256 depositAmount = expectations.depositAmounts[depositor];
-            if (depositAmount > 0) {
-                uint256 proportionalShare = FixedPointMathLib.mulDivUp(
-                    liquidatedCollateral,
-                    depositAmount,
-                    expectations.activeCollateral
-                );
-                expectations.depositAmounts[depositor] = expectations
-                    .depositAmounts[depositor]
-                    .satSub(proportionalShare);
-                expectations.liquidatedAmounts[depositor] += proportionalShare;
-                expectations.maxRoundingError[depositor] += 1;
-            }
+    function getShareValue(address depositor) public view returns (uint256) {
+        uint256 shares = expectations.shares[depositor];
+        if (expectations.totalShares == 0) {
+            return 0;
         }
+        return
+            FixedPointMathLib.fullMulDiv(
+                shares,
+                expectations.activeCollateral,
+                expectations.totalShares
+            );
+    }
+
+    function subtractLiquidatedCollateral(uint256 liquidatedCollateral) public {
         expectations.activeCollateral = expectations.activeCollateral.satSub(
             liquidatedCollateral
         );
+        if (expectations.activeCollateral == 0) {
+            for (uint256 i = 0; i < expectations.depositors.length; i++) {
+                address depositor = expectations.depositors[i];
+                expectations.shares[depositor] = 0;
+            }
+            expectations.totalShares = 0;
+        }
     }
 
     function updateReclaimedCollateral(address depositor) public {
-        expectations.depositAmounts[depositor] = 0;
-        expectations.activeCollateral -= expectations.depositAmounts[depositor];
+        uint256 shares = expectations.shares[depositor];
+        uint256 shareValue = getShareValue(depositor);
+        expectations.activeCollateral -= shareValue;
+        expectations.totalShares -= shares;
+        expectations.shares[depositor] = 0;
     }
 
     function validateCollateralExpectations() internal view {
@@ -86,9 +101,10 @@ contract BaseTest is Test {
         );
         for (uint256 i = 0; i < expectations.depositors.length; i++) {
             address depositor = expectations.depositors[i];
+            uint256 value = getShareValue(depositor);
             assertApproxEqAbs(
                 collateral.getReclaimableAmount(depositor),
-                expectations.depositAmounts[depositor],
+                value,
                 expectations.maxRoundingError[depositor],
                 "depositAmount mismatch"
             );
@@ -171,7 +187,7 @@ contract BaseTest is Test {
         collateral.deposit(amount);
         addDepositor(account, amount);
 
-        assertEq(collateral.totalShares(), totalShares + amount);
+        assertEq(collateral.totalShares(), expectations.totalShares);
         assertEq(
             collateral.availableCollateral(),
             availableCollateral + amount,
@@ -315,8 +331,7 @@ contract BaseTest is Test {
         uint256 totalShares = collateral.totalShares();
         uint256 availableCollateral = collateral.availableCollateral();
 
-        bool willFail = shares == 0 ||
-            reclaimAmount == 0;
+        bool willFail = shares == 0 || reclaimAmount == 0;
         if (shares == 0) {
             vm.expectRevert(
                 abi.encodeWithSelector(
@@ -354,11 +369,7 @@ contract BaseTest is Test {
                 0,
                 "getReclaimableAmount not updated"
             );
-            assertEq(
-                depositor2.shares,
-                depositor.shares,
-                "shares not updated"
-            );
+            assertEq(depositor2.shares, 0, "shares not updated");
             assertEq(
                 collateral.availableCollateral(),
                 availableCollateral - reclaimAmount,
