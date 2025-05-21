@@ -28,6 +28,13 @@ struct Depositor {
 ///         Note: This carries the inherent risk that a malicious executor in collaboration with a malicious
 ///         maker on Bebop could steal user funds by processing a liquidation at a poor price.
 ///
+///         Deposits are indexed with an incrementing value mapped to the depositor.
+///         When the contract's collateral is fully liquidated, the index of the most recent deposit is written to
+///         `lastFullLiquidationDepositIndex` and the `totalShares` is set to 0. Any depositors with a deposit index
+///         less than or equal to `lastFullLiquidationDepositIndex` will have their shares reset to 0.
+///         This ensures that depositors whose collateral has been fully liquidated do not have any remaining ownership
+///         of the contract's collateral when other depositors make new deposits.
+///
 ///         If tokens are sent to the contract by mistake, the borrower can rescue them using the `rescueTokens` function.
 ///         The contract internally tracks the amount of the collateral asset that it has as the difference between the total
 ///         deposited and the total liquidated / withdrawn. If the contract has an excess balance of the collateral asset, it
@@ -102,7 +109,8 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     event CollateralDeposited(
         address depositor,
         uint256 depositAmount,
-        uint256 sharesMinted
+        uint256 sharesMinted,
+        uint256 depositIndex
     );
     event CollateralReclaimed(
         address reclaimant,
@@ -116,7 +124,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     );
     event UnderlyingAssetSentToMarket(uint256 amountSent);
     event TokenRescued(address token, uint256 amountRescued);
-    event FullLiquidation();
+    event FullLiquidation(uint32 lastFullLiquidationDepositIndex);
     event LiquidatedSharesReset(address account, uint256 sharesReset);
 
     error BadRescueAttempt(address token);
@@ -263,11 +271,12 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         Depositor storage depositor = _getDepositor(msg.sender);
         depositor.shares += shares;
-        depositor.lastDepositIndex = ++nextDepositIndex;
+        uint32 index = ++nextDepositIndex;
+        depositor.lastDepositIndex = index;
         totalShares += shares;
         availableCollateral += depositAmount;
 
-        emit CollateralDeposited(msg.sender, depositAmount, shares);
+        emit CollateralDeposited(msg.sender, depositAmount, shares, index);
         return true;
     }
 
@@ -410,7 +419,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         if (availableCollateral == 0) {
             totalShares = 0;
             lastFullLiquidationDepositIndex = nextDepositIndex;
-            emit FullLiquidation();
+            emit FullLiquidation(lastFullLiquidationDepositIndex);
         }
     }
 
