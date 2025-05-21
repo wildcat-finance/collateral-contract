@@ -22,8 +22,13 @@ contract WildcatMarketCollateralFactory {
 
     error CollateralContractAlreadyExists();
 
-    event ExecutorApproved(address indexed executor);
-    event ExecutorRemoved(address indexed executor);
+    event ExecutorApproved(address executor);
+    event ExecutorRemoved(address executor);
+    event CollateralContractCreated(
+        address collateralContract,
+        address collateralToken,
+        address associatedMarket
+    );
 
     error CallerNotArchControllerOwner();
 
@@ -229,6 +234,12 @@ contract WildcatMarketCollateralFactory {
                 _collateralToken,
                 _associatedMarket
             )
+        );
+
+        emit CollateralContractCreated(
+            collateralContract,
+            _collateralToken,
+            _associatedMarket
         );
     }
 }
