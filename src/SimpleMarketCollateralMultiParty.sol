@@ -189,7 +189,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         // It is overwritten with the name bytes in the same operation as the length.
         assembly {
             mstore(
-                0x53,
+                0x5b,
                 0x1b57696c64636174436f6c6c61746572616c436f6e74726163745631
             )
             mstore(0x20, 0x20)

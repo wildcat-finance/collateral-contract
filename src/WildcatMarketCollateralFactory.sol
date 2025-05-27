@@ -129,7 +129,7 @@ contract WildcatMarketCollateralFactory {
         // It is overwritten with the name bytes in the same operation as the length.
         assembly {
             mstore(
-                0x53,
+                0x5a,
                 0x1a57696c64636174436F6c6c61746572616c466163746f72795631
             )
             mstore(0x20, 0x20)
