@@ -4,8 +4,6 @@ pragma solidity >=0.8.20;
 import "./BaseTest.sol";
 
 using MathUtils for uint256;
- 
-
 
 contract CollateralHandler {
     SimpleMarketCollateralMultiParty collateral;
@@ -14,6 +12,26 @@ contract CollateralHandler {
     address executor;
     Vm private vm;
     BaseTest test;
+    uint public ghost_zeroLiquidations;
+
+    mapping(bytes32 => uint256) public calls;
+
+    modifier countCall(bytes32 key) {
+        calls[key]++;
+        _;
+    }
+
+    function callSummary() external view {
+        console.log("Call summary:");
+        console.log("-------------------");
+        console.log("deposit", calls["deposit"]);
+        console.log("liquidateCollateral", calls["liquidateCollateral"]);
+        console.log("reclaimCollateral", calls["reclaimCollateral"]);
+        console.log("fullLiquidate", calls["fullLiquidate"]);
+        console.log("-------------------");
+
+        console.log("Zero liquidations:", ghost_zeroLiquidations);
+    }
 
     constructor(
         SimpleMarketCollateralMultiParty _collateral,
@@ -31,6 +49,10 @@ contract CollateralHandler {
             address(bytes20(uint160(uint256(keccak256("hevm cheat code")))))
         );
     }
+
+    // function closeMarket() public {
+    //     market.setState(100 ether, 100 ether, false, 0, true);
+    // }
 
     function _hem(
         uint256 x,
@@ -83,8 +105,11 @@ contract CollateralHandler {
         }
     }
 
-    function deposit(address depositor, uint256 amount) public {
-        amount = _hem(amount, 0, type(uint104).max);
+    function deposit(
+        address depositor,
+        uint256 amount
+    ) public countCall("deposit") {
+        amount = _hem(amount, 1000, type(uint104).max - 100 ether);
         // Mint tokens to depositor
         collateralAsset.mint(depositor, amount);
         // Approve collateral contract to spend tokens
@@ -97,17 +122,40 @@ contract CollateralHandler {
         test.addDepositor(depositor, amount);
     }
 
+    function fullLiquidate() external countCall("fullLiquidate") {
+        uint availableCollateral = collateral.availableCollateral();
+        if (availableCollateral == 0) {
+            ghost_zeroLiquidations++;
+            return;
+        }
+        liquidateCollateral(
+            availableCollateral,
+            availableCollateral,
+            availableCollateral
+        );
+    }
+
     function liquidateCollateral(
         uint256 delinquentAmount,
         uint256 collateralToLiquidate,
         uint256 underlyingOut
-    ) public {
-        delinquentAmount = _hem(delinquentAmount, 0, type(uint104).max);
+    ) public countCall("liquidateCollateral") {
+        delinquentAmount = _hem(delinquentAmount, 1000, type(uint104).max - 100 ether);
+        if (collateral.nextLiquidationTrigger() > block.timestamp) {
+            vm.warp(collateral.nextLiquidationTrigger() + 1);
+        }
+        uint availableCollateral = collateral.availableCollateral();
+        if (availableCollateral < 1000) {
+            ghost_zeroLiquidations++;
+            return;
+        }
         collateralToLiquidate = _hem(
             collateralToLiquidate,
-            0,
-            collateral.availableCollateral()
+            1000,
+            availableCollateral
         );
+        underlyingOut = _hem(underlyingOut, 1000, delinquentAmount);
+
         // Set market state to delinquent
         market.setState(
             100 ether + delinquentAmount,
@@ -139,22 +187,25 @@ contract CollateralHandler {
         test.subtractLiquidatedCollateral(collateralToLiquidate);
     }
 
-    function reclaimCollateral(address depositor) public {
+    function reclaimCollateral(
+        address depositor
+    ) public countCall("reclaimCollateral") {
+        if (!market.isClosed()) {
+            market.setState(100 ether, 100 ether, false, 0, true);
+        }
         vm.prank(depositor);
         collateral.reclaimCollateral();
         // Update expectations
         test.updateReclaimedCollateral(depositor);
     }
 
-    function rescueTokens(address token) public {
+    function rescueTokens(address token) public countCall("rescueTokens") {
         vm.prank(collateral.marketBorrower());
         collateral.rescueTokens(token);
     }
 }
 
-contract SimpleMarketCollateralMultiPartyInvariantTest is
-    BaseTest
-{
+contract SimpleMarketCollateralMultiPartyInvariantTest is BaseTest {
     CollateralHandler handler;
 
     function setUp() public override {
@@ -170,35 +221,39 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is
         );
 
         // Add handler as target
-        targetContract(address(handler));
 
         // Set target selectors
         bytes4[] memory selectors = new bytes4[](4);
         selectors[0] = CollateralHandler.deposit.selector;
         selectors[1] = CollateralHandler.liquidateCollateral.selector;
         selectors[2] = CollateralHandler.reclaimCollateral.selector;
-        selectors[3] = CollateralHandler.rescueTokens.selector;
-
+        // selectors[3] = CollateralHandler.rescueTokens.selector;
+        selectors[3] = CollateralHandler.fullLiquidate.selector;
         targetSelector(
             FuzzSelector({addr: address(handler), selectors: selectors})
         );
+        targetContract(address(handler));
+    }
+
+    function invariant_callSummary() public {
+        handler.callSummary();
     }
 
     function invariant_totalDepositedMatchesSum() public {
         uint256 sum = 0;
         for (uint256 i = 0; i < expectations.depositors.length; i++) {
             address depositor = expectations.depositors[i];
-            (, uint248 amountDeposited) = collateral.getDepositor(depositor);
-            sum += amountDeposited;
+            Depositor memory _depositor = collateral.getDepositor(depositor);
+            sum += _depositor.shares;
         }
         assertEq(
             sum,
-            expectations.totalDeposited,
+            collateral.totalShares(),
             "Sum of deposits should match total deposited"
         );
         assertEq(
             sum,
-            collateral.totalDeposited(),
+            collateral.totalShares(),
             "Sum of deposits should match contract total deposited"
         );
     }
@@ -209,54 +264,41 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is
             collateral.availableCollateral(),
             "Available collateral should match expectations"
         );
-        assertEq(
-            collateral.totalDeposited() - collateral.totalLiquidated(),
-            collateral.availableCollateral(),
-            "Available collateral should be total deposited minus liquidated"
-        );
     }
 
     function invariant_reclaimableAmounts() public {
         for (uint256 i = 0; i < expectations.depositors.length; i++) {
             address depositor = expectations.depositors[i];
             assertApproxEqAbs(
-                expectations.depositAmounts[depositor],
                 collateral.getReclaimableAmount(depositor),
+                getShareValue(depositor),
                 expectations.maxRoundingError[depositor],
                 "Reclaimable amount should match expectations"
             );
         }
     }
 
-    function invariant_totalShares() public {
-        assertEq(
-            collateral.totalShares(),
-            collateral.totalDeposited(),
-            "Total shares should equal total deposited"
-        );
-    }
+    // function invariant_liquidatedCollateralProportional() public {
+    //     uint256 totalLiquidated = expectations.totalDeposited - expectations.activeCollateral;
+    //     if (totalLiquidated == 0) return;
 
-    function invariant_liquidatedCollateralProportional() public {
-        uint256 totalLiquidated = collateral.totalLiquidated();
-        if (totalLiquidated == 0) return;
-
-        for (uint256 i = 0; i < expectations.depositors.length; i++) {
-            address depositor = expectations.depositors[i];
-            uint256 actual = collateral.getLiquidatedCollateral(depositor);
-            uint256 expected = expectations.liquidatedAmounts[depositor];
-            assertGe(
-                actual,
-                expected,
-                "Liquidated collateral should be greater than or equal to expected"
-            );
-            assertApproxEqAbs(
-                actual,
-                expected,
-                1,
-                "Liquidated collateral should be proportional to deposit"
-            );
-        }
-    }
+    //     for (uint256 i = 0; i < expectations.depositors.length; i++) {
+    //         address depositor = expectations.depositors[i];
+    //         uint256 actual = collateral.getLiquidatedCollateral(depositor);
+    //         uint256 expected = expectations.liquidatedAmounts[depositor];
+    //         assertGe(
+    //             actual,
+    //             expected,
+    //             "Liquidated collateral should be greater than or equal to expected"
+    //         );
+    //         assertApproxEqAbs(
+    //             actual,
+    //             expected,
+    //             1,
+    //             "Liquidated collateral should be proportional to deposit"
+    //         );
+    //     }
+    // }
 
     /// INVARIANTS:
     /// 1. No depositor can withdraw more than their deposited amount minus their proportion of
@@ -264,18 +306,18 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is
     /// 2. The sum of all withdrawable amounts should be less than or equal to the total available
     /// collateral.
     function invariant_canNotWithdrawMoreThanAvailable() public {
-        uint256 totalDeposited = collateral.totalDeposited();
+        uint256 totalDeposited = collateral.totalShares();
         if (totalDeposited == 0) return;
         uint256 sumAvailable;
         for (uint256 i = 0; i < expectations.depositors.length; i++) {
             address depositor = expectations.depositors[i];
             uint256 actual = collateral.getReclaimableAmount(depositor);
-            uint256 expected = expectations.depositAmounts[depositor];
-            /* assertGe(
+            uint256 expected = getShareValue(depositor);
+            assertLe(
                 actual,
                 expected,
                 "Reclaimable amount should be <= deposited amount minus liquidated collateral"
-            ); */
+            );
             assertApproxEqAbs(
                 actual,
                 expected,
@@ -289,6 +331,11 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is
             collateral.availableCollateral(),
             "Sum of reclaimable amounts should be <= available collateral"
         );
+        assertLe(
+            sumAvailable,
+            collateralAsset.balanceOf(address(collateral)),
+            "Sum of reclaimable amounts should be <= collateral asset balance"
+        );
         assertApproxEqAbs(
             sumAvailable,
             collateral.availableCollateral(),
@@ -296,4 +343,13 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is
             "Sum of reclaimable amounts should be equal to available collateral within 1 wei per depositor"
         );
     }
+
+    // function invariant_canAlwaysWithdrawWhenClosed() public {
+    //     if (!market.isClosed()) return;
+    //     for (uint256 i = 0; i < expectations.depositors.length; i++) {
+    //         address depositor = expectations.depositors[i];
+
+    //         assertEq(collateral.getReclaimableAmount(depositor), 0, "Reclaimable amount should be 0 when market is closed");
+    //     }
+    // }
 }

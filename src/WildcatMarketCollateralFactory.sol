@@ -22,8 +22,13 @@ contract WildcatMarketCollateralFactory {
 
     error CollateralContractAlreadyExists();
 
-    event ExecutorApproved(address indexed executor);
-    event ExecutorRemoved(address indexed executor);
+    event ExecutorApproved(address executor);
+    event ExecutorRemoved(address executor);
+    event CollateralContractCreated(
+        address collateralContract,
+        address collateralToken,
+        address associatedMarket
+    );
 
     error CallerNotArchControllerOwner();
 
@@ -124,7 +129,7 @@ contract WildcatMarketCollateralFactory {
         // It is overwritten with the name bytes in the same operation as the length.
         assembly {
             mstore(
-                0x53,
+                0x5a,
                 0x1a57696c64636174436F6c6c61746572616c466163746f72795631
             )
             mstore(0x20, 0x20)
@@ -229,6 +234,12 @@ contract WildcatMarketCollateralFactory {
                 _collateralToken,
                 _associatedMarket
             )
+        );
+
+        emit CollateralContractCreated(
+            collateralContract,
+            _collateralToken,
+            _associatedMarket
         );
     }
 }
