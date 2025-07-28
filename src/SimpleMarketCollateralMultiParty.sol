@@ -274,7 +274,12 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         totalShares += shares;
         availableCollateral += depositAmount;
 
-        emit CollateralDeposited(msg.sender, depositAmount, shares, fullLiquidationIndex);
+        emit CollateralDeposited(
+            msg.sender,
+            depositAmount,
+            shares,
+            fullLiquidationIndex
+        );
         return true;
     }
 
