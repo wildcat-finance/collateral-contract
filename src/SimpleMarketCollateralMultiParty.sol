@@ -14,7 +14,7 @@ using SafeCastLib for uint256;
 
 struct Depositor {
     uint224 shares;
-    uint32 lastDepositIndex;
+    uint32 lastFullLiquidationIndex;
 }
 
 /// @title SimpleMarketCollateralMultiParty
@@ -47,8 +47,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     using FunctionTypeCasts for *;
 
     /// @dev The index of the last deposit that was fully liquidated.
-    uint32 public lastFullLiquidationDepositIndex;
-    uint32 public nextDepositIndex;
+    uint32 public fullLiquidationIndex;
 
     mapping(address account => Depositor depositor) internal _depositors;
 
@@ -56,17 +55,17 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         address account
     ) internal returns (Depositor storage depositor) {
         depositor = _depositors[account];
-        if (depositor.lastDepositIndex <= lastFullLiquidationDepositIndex) {
+        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
             emit LiquidatedSharesReset(account, depositor.shares);
             depositor.shares = 0;
-            depositor.lastDepositIndex = 0;
+            depositor.lastFullLiquidationIndex = 0;
         }
     }
 
     /// @dev Returns the active shares of an account.
     function sharesOf(address account) public view returns (uint256) {
         Depositor memory depositor = _depositors[account];
-        if (depositor.lastDepositIndex <= lastFullLiquidationDepositIndex) {
+        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
             return 0;
         }
         return depositor.shares;
@@ -76,9 +75,9 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         address account
     ) public view returns (Depositor memory depositor) {
         depositor = _depositors[account];
-        if (depositor.lastDepositIndex <= lastFullLiquidationDepositIndex) {
+        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
             depositor.shares = 0;
-            depositor.lastDepositIndex = 0;
+            depositor.lastFullLiquidationIndex = 0;
         }
     }
 
@@ -95,8 +94,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
     address public immutable underlyingAsset;
 
-    address public immutable bebopSettlementContract =
-        0xbbbbbBB520d69a9775E85b458C58c648259FAD5F;
+    address public immutable bebopSettlementContract;
 
     uint32 public immutable liquidationCooldown;
 
@@ -110,7 +108,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         address depositor,
         uint256 depositAmount,
         uint256 sharesMinted,
-        uint256 depositIndex
+        uint32 lastFullLiquidationIndex
     );
     event CollateralReclaimed(
         address reclaimant,
@@ -124,7 +122,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     );
     event UnderlyingAssetSentToMarket(uint256 amountSent);
     event TokenRescued(address token, uint256 amountRescued);
-    event FullLiquidation(uint32 lastFullLiquidationDepositIndex);
+    event FullLiquidation(uint32 lastFullLiquidationIndex);
     event LiquidatedSharesReset(address account, uint256 sharesReset);
 
     error BadRescueAttempt(address token);
@@ -204,8 +202,8 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     {
         assembly {
             collateralParametersPointer := mload(0x40)
-            // one word worth of space for three addresses in the struct: 96 bytes = 0x60
-            mstore(0x40, add(collateralParametersPointer, 0x60))
+            // one word worth of space for four addresses in the struct: 128 bytes = 0x80
+            mstore(0x40, add(collateralParametersPointer, 0x80))
             // Write the selector for WildcatMarketCollateralFactory.getCollateralParameters
             mstore(0x00, 0x5d861505)
             // Call `getCollateralParameters` and copy the returned struct to the allocated memory
@@ -214,14 +212,14 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
             // the factory contract which will only ever return the prepared collateral parameters.
             if iszero(
                 and(
-                    eq(returndatasize(), 0x60),
+                    eq(returndatasize(), 0x80),
                     staticcall(
                         gas(),
                         caller(),
                         0x1c,
                         0x04,
                         collateralParametersPointer,
-                        0x60
+                        0x80
                     )
                 )
             ) {
@@ -240,6 +238,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         collateralAsset = parameters.collateralToken;
         market = IWildcatMarket(parameters.associatedMarket);
         marketBorrower = parameters.borrower;
+        bebopSettlementContract = parameters.bebopSettlementContract;
 
         underlyingAsset = market.asset();
 
@@ -271,12 +270,11 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         Depositor storage depositor = _getDepositor(msg.sender);
         depositor.shares += shares;
-        uint32 index = ++nextDepositIndex;
-        depositor.lastDepositIndex = index;
+        depositor.lastFullLiquidationIndex = fullLiquidationIndex;
         totalShares += shares;
         availableCollateral += depositAmount;
 
-        emit CollateralDeposited(msg.sender, depositAmount, shares, index);
+        emit CollateralDeposited(msg.sender, depositAmount, shares, fullLiquidationIndex);
         return true;
     }
 
@@ -418,8 +416,8 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         // liquidation will have their shares reset to 0.
         if (availableCollateral == 0) {
             totalShares = 0;
-            lastFullLiquidationDepositIndex = nextDepositIndex;
-            emit FullLiquidation(lastFullLiquidationDepositIndex);
+            fullLiquidationIndex += 1;
+            emit FullLiquidation(fullLiquidationIndex);
         }
     }
 
