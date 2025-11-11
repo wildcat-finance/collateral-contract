@@ -365,6 +365,52 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
     }
 
+    function test_liquidateCollateral_NonAtomicPath() external {
+        _deposit(100 ether);
+
+        uint256 totalAssetsBefore = 6_939_340_000_000_000_000;
+        MarketState memory traceState = MarketState({
+            isClosed: false,
+            maxTotalSupply: 2_000_000_000_000_000_000_000_000,
+            accruedProtocolFees: 3_890_577_957_511_165,
+            normalizedUnclaimedWithdrawals: 6_939_332_798_702_776_300,
+            scaledTotalSupply: 98_995_825_804_078_239_729,
+            scaledPendingWithdrawals: 48_997_892_878_178_946_646,
+            pendingWithdrawalExpiry: 0,
+            isDelinquent: true,
+            timeDelinquent: uint32(liquidationCooldown + 1),
+            protocolFeeBips: 500,
+            annualInterestBips: 500,
+            reserveRatioBips: 0,
+            scaleFactor: 1e27,
+            lastInterestAccruedTimestamp: uint32(block.timestamp)
+        });
+
+        market.setState(traceState);
+        market.setPendingAccruals(
+            6_939_332_798_702_776_300,
+            3_890_577_957_511_165
+        );
+
+        uint256 currentBalance = underlyingAsset.balanceOf(address(market));
+        if (currentBalance > 0) {
+            underlyingAsset.burn(address(market), currentBalance);
+        }
+        underlyingAsset.mint(address(market), totalAssetsBefore);
+
+        bytes memory data =
+            _encodeExecute({amountIn: 6 ether, amountOut: 6_939_340_000_000_000_000, shouldRevert: false});
+
+        vm.prank(executor);
+        vm.expectRevert(stdError.arithmeticError);
+        collateral.liquidateCollateral({
+            quoteCalldata: data,
+            minUnderlyingOut: 6_939_340_000_000_000_000,
+            maxCollateralToLiquidate: 6 ether,
+            lengthWithdrawalQueue: 1
+        });
+    }
+
     /// Test that deposits are not penalized for prior liquidations
     function test_depositAfterLiquidation() external {
         _deposit(100 ether);

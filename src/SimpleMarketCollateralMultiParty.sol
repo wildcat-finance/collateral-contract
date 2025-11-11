@@ -17,6 +17,11 @@ struct Depositor {
     uint32 lastDepositIndex;
 }
 
+struct RepayThresholds {
+    uint256 minRepay;
+    uint256 minAtomicRepay;
+}
+
 /// @title SimpleMarketCollateralMultiParty
 /// @notice A basic collateral contract for Wildcat markets that supports multiple depositors.
 ///
@@ -334,6 +339,23 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         delinquentDebt = coverageLiquidity.satSub(marketTotalAssets);
     }
 
+    function _getDelinquencyWithState()
+        internal
+        view
+        returns (bool marketInPenalty, uint256 delinquentDebt, MarketState memory state)
+    {
+        state = market.currentState();
+        if (state.isClosed) revert MarketTerminated();
+
+        // Check whether market delinquency timer is past the grace period
+        marketInPenalty = state.timeDelinquent > liquidationCooldown;
+
+        uint256 coverageLiquidity = state.liquidityRequired();
+        uint256 marketTotalAssets = underlyingAsset.balanceOf(address(market));
+
+        delinquentDebt = coverageLiquidity.satSub(marketTotalAssets);
+    }
+
     /// @dev Sells collateral and repays delinquent debt of the market through Bebop PMM
     ///      Requires that the underlying token is supported by Bebop PMM via this list:
     ///      https://api.bebop.xyz/pmm/ethereum/v3/token-info
@@ -358,8 +380,9 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     {
         (
             bool marketInPenalty,
-            uint delinquentDebt
-        ) = getMarketDelinquencyStatus();
+            uint delinquentDebt,
+            MarketState memory state
+        ) = _getDelinquencyWithState();
 
         // Ensure the market is in penalty state, there is no active cooldown, and
         // there is enough collateral for the liquidation
@@ -372,6 +395,10 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
         // Calculate the maximum repayment amount
         uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
+        RepayThresholds memory thresholds = _computeRepaymentThresholds(
+            state,
+            underlyingAsset.balanceOf(address(market))
+        );
 
         // Approve the Bebop settlement contract to spend the collateral
         collateralAsset.safeApprove(
@@ -396,9 +423,11 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         if (underlyingAmountReceived > maxRepayment)
             revert MaxRepaymentExceeded();
 
-        // Flush pending batches and accrue fees so repayAndProcess cannot underflow due to stale state
-        // repayAndProcess internal _getUpdatedState() will be a noop aside from rereading the current state
-        market.updateState();
+        if (underlyingAmountReceived < thresholds.minAtomicRepay) {
+            if (underlyingAmountReceived < thresholds.minRepay)
+                revert InsufficientSwapOutput();
+            market.updateState();
+        }
 
         // Transfer underlying asset to the market and process repayment.
         underlyingAsset.safeTransfer(address(market), underlyingAmountReceived);
@@ -424,6 +453,20 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
             totalShares = 0;
             lastFullLiquidationDepositIndex = nextDepositIndex;
             emit FullLiquidation(lastFullLiquidationDepositIndex);
+        }
+    }
+
+    function _computeRepaymentThresholds(
+        MarketState memory state,
+        uint256 totalAssetsBeforeRepay
+    ) internal pure returns (RepayThresholds memory thresholds) {
+        uint256 baseLiabilities =
+            state.accruedProtocolFees +
+            state.normalizedUnclaimedWithdrawals;
+        thresholds.minRepay = baseLiabilities.satSub(totalAssetsBeforeRepay);
+        thresholds.minAtomicRepay = thresholds.minRepay;
+        if (state.scaledPendingWithdrawals > 0) {
+            thresholds.minAtomicRepay += state.normalizeAmount(state.scaledPendingWithdrawals);
         }
     }
 
