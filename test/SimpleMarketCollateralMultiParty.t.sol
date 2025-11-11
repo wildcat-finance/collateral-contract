@@ -353,13 +353,14 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
 
         vm.prank(executor);
-        vm.expectRevert(stdError.arithmeticError);
         collateral.liquidateCollateral({
             quoteCalldata: data,
             minUnderlyingOut: 5_939_340_000_000_000_000,
             maxCollateralToLiquidate: 6 ether,
             lengthWithdrawalQueue: 1
         });
+
+        assertEq(market.lastAvailableLiquidity(), 0, "liquidity should clamp to zero");
     }
 
     /// Test that deposits are not penalized for prior liquidations

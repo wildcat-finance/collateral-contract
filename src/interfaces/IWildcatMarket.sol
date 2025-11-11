@@ -14,6 +14,8 @@ interface IWildcatMarket {
 
     function currentState() external view returns (MarketState memory);
 
+    function updateState() external;
+
     function repayAndProcessUnpaidWithdrawalBatches(
         uint256 repayAmount,
         uint256 maxBatches

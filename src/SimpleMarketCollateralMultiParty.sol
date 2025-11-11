@@ -396,6 +396,10 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         if (underlyingAmountReceived > maxRepayment)
             revert MaxRepaymentExceeded();
 
+        // Flush pending batches and accrue fees so repayAndProcess cannot underflow due to stale state
+        // repayAndProcess internal _getUpdatedState() will be a noop aside from rereading the current state
+        market.updateState();
+
         // Transfer underlying asset to the market and process repayment.
         underlyingAsset.safeTransfer(address(market), underlyingAmountReceived);
         market.repayAndProcessUnpaidWithdrawalBatches(0, lengthWithdrawalQueue);

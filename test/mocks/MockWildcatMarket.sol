@@ -7,6 +7,7 @@ import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 contract MockWildcatMarket {
     MarketState internal _state;
     uint256 public lastAvailableLiquidity;
+    bool public stateFresh;
 
     address public borrower;
     address public asset;
@@ -50,10 +51,23 @@ contract MockWildcatMarket {
         uint256 liabilities = uint256(_state.normalizedUnclaimedWithdrawals) +
             _state.accruedProtocolFees;
 
-        uint256 availableLiquidity = totalAssets() - liabilities;
+        uint256 availableLiquidity;
+        if (stateFresh) {
+            uint256 assets = totalAssets();
+            availableLiquidity = assets > liabilities
+                ? assets - liabilities
+                : 0;
+            stateFresh = false;
+        } else {
+            availableLiquidity = totalAssets() - liabilities;
+        }
         lastAvailableLiquidity = availableLiquidity;
 
         emit Repayment(repayAmount, maxBatches);
+    }
+
+    function updateState() external {
+        stateFresh = true;
     }
 
     function totalAssets() public view returns (uint256) {
