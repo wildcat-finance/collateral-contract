@@ -7,7 +7,8 @@ import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 contract MockWildcatMarket {
     MarketState internal _state;
     uint256 public lastAvailableLiquidity;
-    bool public stateFresh;
+    uint128 public pendingNormalizedUnclaimed;
+    uint128 public pendingAccruedProtocolFees;
 
     address public borrower;
     address public asset;
@@ -51,33 +52,34 @@ contract MockWildcatMarket {
         uint256 liabilities = uint256(_state.normalizedUnclaimedWithdrawals) +
             _state.accruedProtocolFees;
 
-        uint256 availableLiquidity;
-        if (stateFresh) {
-            uint256 assets = totalAssets();
-            availableLiquidity = assets > liabilities
-                ? assets - liabilities
-                : 0;
-            stateFresh = false;
-        } else {
-            availableLiquidity = totalAssets() - liabilities;
-        }
+        liabilities += pendingNormalizedUnclaimed + pendingAccruedProtocolFees;
+
+        uint256 availableLiquidity = totalAssets() - liabilities;
         lastAvailableLiquidity = availableLiquidity;
 
         emit Repayment(repayAmount, maxBatches);
     }
 
     function updateState() external {
-        stateFresh = true;
+        _state.normalizedUnclaimedWithdrawals += pendingNormalizedUnclaimed;
+        _state.accruedProtocolFees += pendingAccruedProtocolFees;
+        pendingNormalizedUnclaimed = 0;
+        pendingAccruedProtocolFees = 0;
+    }
+
+    function setPendingAccruals(
+        uint128 normalizedUnclaimed,
+        uint128 accruedFees
+    ) external {
+        pendingNormalizedUnclaimed = normalizedUnclaimed;
+        pendingAccruedProtocolFees = accruedFees;
     }
 
     function totalAssets() public view returns (uint256) {
         return MockERC20(asset).balanceOf(address(this));
     }
 
-    function setAccountingState(
-        uint128 normalizedUnclaimedWithdrawals,
-        uint128 accruedProtocolFees
-    ) external {
+    function setAccountingState(uint128 normalizedUnclaimedWithdrawals, uint128 accruedProtocolFees) external {
         _state.normalizedUnclaimedWithdrawals = normalizedUnclaimedWithdrawals;
         _state.accruedProtocolFees = accruedProtocolFees;
     }

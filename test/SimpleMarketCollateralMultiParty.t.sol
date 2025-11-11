@@ -339,19 +339,23 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
 
         market.setState(traceState);
-
+        market.setPendingAccruals(
+            6_939_332_798_702_776_300,
+            3_890_577_957_511_165
+        );
         uint256 currentBalance = underlyingAsset.balanceOf(address(market));
         if (currentBalance > 0) {
             underlyingAsset.burn(address(market), currentBalance);
         }
         underlyingAsset.mint(address(market), totalAssetsBefore);
 
-        bytes memory data = _encodeExecute({
-            amountIn: 6 ether,
-            amountOut: 5_939_340_000_000_000_000,
-            shouldRevert: false
-        });
+        vm.expectRevert(stdError.arithmeticError);
+        market.repayAndProcessUnpaidWithdrawalBatches(0, 1);
 
+        bytes memory data =
+            _encodeExecute({amountIn: 6 ether, amountOut: 5_939_340_000_000_000_000, shouldRevert: false});
+
+        // vm.expectRevert(stdError.arithmeticError);
         vm.prank(executor);
         collateral.liquidateCollateral({
             quoteCalldata: data,
@@ -359,8 +363,6 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             maxCollateralToLiquidate: 6 ether,
             lengthWithdrawalQueue: 1
         });
-
-        assertEq(market.lastAvailableLiquidity(), 0, "liquidity should clamp to zero");
     }
 
     /// Test that deposits are not penalized for prior liquidations
