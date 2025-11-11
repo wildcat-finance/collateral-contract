@@ -63,16 +63,17 @@ contract MockWildcatMarket {
     function updateState() external {
         _state.normalizedUnclaimedWithdrawals += pendingNormalizedUnclaimed;
         _state.accruedProtocolFees += pendingAccruedProtocolFees;
+        _state.scaledPendingWithdrawals = 0;
         pendingNormalizedUnclaimed = 0;
         pendingAccruedProtocolFees = 0;
     }
 
     function setPendingAccruals(
-        uint128 normalizedUnclaimed,
-        uint128 accruedFees
+        uint128 normalizedUnclaimedDelta,
+        uint128 accruedFeesDelta
     ) external {
-        pendingNormalizedUnclaimed = normalizedUnclaimed;
-        pendingAccruedProtocolFees = accruedFees;
+        pendingNormalizedUnclaimed = normalizedUnclaimedDelta;
+        pendingAccruedProtocolFees = accruedFeesDelta;
     }
 
     function totalAssets() public view returns (uint256) {

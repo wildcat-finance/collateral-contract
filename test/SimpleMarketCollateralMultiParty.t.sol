@@ -339,10 +339,10 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
 
         market.setState(traceState);
-        market.setPendingAccruals(
-            6_939_332_798_702_776_300,
-            3_890_577_957_511_165
-        );
+        market.setPendingAccruals({
+            normalizedUnclaimedDelta: 3_883_376_660_287_465,
+            accruedFeesDelta: 0
+        });
         uint256 currentBalance = underlyingAsset.balanceOf(address(market));
         if (currentBalance > 0) {
             underlyingAsset.burn(address(market), currentBalance);
@@ -355,7 +355,11 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         bytes memory data =
             _encodeExecute({amountIn: 6 ether, amountOut: 5_939_340_000_000_000_000, shouldRevert: false});
 
-        // vm.expectRevert(stdError.arithmeticError);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.InsufficientSwapOutput.selector
+            )
+        );
         vm.prank(executor);
         collateral.liquidateCollateral({
             quoteCalldata: data,
@@ -388,8 +392,8 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
 
         market.setState(traceState);
         market.setPendingAccruals(
-            6_939_332_798_702_776_300,
-            3_890_577_957_511_165
+            3_883_376_660_287_465,
+            0
         );
 
         uint256 currentBalance = underlyingAsset.balanceOf(address(market));
@@ -398,17 +402,25 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         }
         underlyingAsset.mint(address(market), totalAssetsBefore);
 
-        bytes memory data =
-            _encodeExecute({amountIn: 6 ether, amountOut: 6_939_340_000_000_000_000, shouldRevert: false});
+        bytes memory data = _encodeExecute({
+            amountIn: 6 ether,
+            amountOut: 6_939_340_000_000_000_000,
+            shouldRevert: false
+        });
 
         vm.prank(executor);
-        vm.expectRevert(stdError.arithmeticError);
         collateral.liquidateCollateral({
             quoteCalldata: data,
             minUnderlyingOut: 6_939_340_000_000_000_000,
             maxCollateralToLiquidate: 6 ether,
             lengthWithdrawalQueue: 1
         });
+
+        assertEq(
+            underlyingAsset.balanceOf(address(market)),
+            totalAssetsBefore + 6_939_340_000_000_000_000,
+            "repayment not forwarded"
+        );
     }
 
     /// Test that deposits are not penalized for prior liquidations

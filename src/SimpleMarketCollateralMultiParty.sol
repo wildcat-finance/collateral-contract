@@ -397,7 +397,8 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
         RepayThresholds memory thresholds = _computeRepaymentThresholds(
             state,
-            underlyingAsset.balanceOf(address(market))
+            underlyingAsset.balanceOf(address(market)),
+            true
         );
 
         // Approve the Bebop settlement contract to spend the collateral
@@ -458,14 +459,15 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
     function _computeRepaymentThresholds(
         MarketState memory state,
-        uint256 totalAssetsBeforeRepay
+        uint256 totalAssetsBeforeRepay,
+        bool includePending
     ) internal pure returns (RepayThresholds memory thresholds) {
         uint256 baseLiabilities =
             state.accruedProtocolFees +
             state.normalizedUnclaimedWithdrawals;
         thresholds.minRepay = baseLiabilities.satSub(totalAssetsBeforeRepay);
         thresholds.minAtomicRepay = thresholds.minRepay;
-        if (state.scaledPendingWithdrawals > 0) {
+        if (includePending && state.scaledPendingWithdrawals > 0) {
             thresholds.minAtomicRepay += state.normalizeAmount(state.scaledPendingWithdrawals);
         }
     }
