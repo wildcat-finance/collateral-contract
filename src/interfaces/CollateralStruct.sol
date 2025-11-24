@@ -5,5 +5,4 @@ struct CollateralParameters {
   address borrower;
   address collateralToken;
   address associatedMarket;
-  address bebopSettlementContract;
 }

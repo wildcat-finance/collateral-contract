@@ -21,19 +21,23 @@ struct Depositor {
 /// @notice A basic collateral contract for Wildcat markets that supports multiple depositors.
 ///
 ///         Users deposit a collateral asset which can be liquidated when the underlying market is in
-///         penalized delinquency. Liquidations are processed through the Bebop PMM by accounts with a
-///         liquidator role managed by the arch-controller owner. The liquidator provides the calldata
-///         for the swap and thus the terms of the swap (minimum output, maximum input, etc.)
+///         penalized delinquency. Liquidations are processed through approved exchanges by accounts with a
+///         liquidator role managed by the arch-controller owner. The liquidator provides the calldata for
+///         the swap and thus the terms of the swap (minimum output, maximum input, etc.)
 ///
-///         Note: This carries the inherent risk that a malicious executor in collaboration with a malicious
-///         maker on Bebop could steal user funds by processing a liquidation at a poor price.
+///         Note: This carries the inherent risk that a malicious liquidator in collaboration with a malicious
+///         exchange (or exchange which can be manipulated) could steal collateral assets by processing a liquidation
+///         at a poor price.
+
+///         Whenever the contract's collateral is fully liquidated, a global value `fullLiquidationIndex` is incremented
+///         and `totalShares` is set to 0.
 ///
-///         Deposits are indexed with an incrementing value mapped to the depositor.
-///         When the contract's collateral is fully liquidated, the index of the most recent deposit is written to
-///         `lastFullLiquidationDepositIndex` and the `totalShares` is set to 0. Any depositors with a deposit index
-///         less than or equal to `lastFullLiquidationDepositIndex` will have their shares reset to 0.
-///         This ensures that depositors whose collateral has been fully liquidated do not have any remaining ownership
-///         of the contract's collateral when other depositors make new deposits.
+///         When deposits are made, the depositor's account is updated with the current `fullLiquidationIndex` to track
+///         which deposits have been made more recently than the last full liquidation.
+///
+///         Any depositors with a `lastFullLiquidationIndex` less than or equal to `fullLiquidationIndex` will have
+///         their shares reset to 0. This ensures that depositors whose collateral has been fully liquidated do not
+///         have any remaining ownership of the contract's collateral when other depositors make new deposits.
 ///
 ///         If tokens are sent to the contract by mistake, the borrower can rescue them using the `rescueTokens` function.
 ///         The contract internally tracks the amount of the collateral asset that it has as the difference between the total
@@ -46,63 +50,54 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     using LibERC20 for address;
     using FunctionTypeCasts for *;
 
-    /// @dev The index of the last deposit that was fully liquidated.
-    uint32 public fullLiquidationIndex;
+    /* ========================================================================== */
+    /*                                  Constants                                 */
+    /* ========================================================================== */
 
-    mapping(address account => Depositor depositor) internal _depositors;
-
-    function _getDepositor(
-        address account
-    ) internal returns (Depositor storage depositor) {
-        depositor = _depositors[account];
-        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
-            emit LiquidatedSharesReset(account, depositor.shares);
-            depositor.shares = 0;
-            depositor.lastFullLiquidationIndex = 0;
-        }
-    }
-
-    /// @dev Returns the active shares of an account.
-    function sharesOf(address account) public view returns (uint256) {
-        Depositor memory depositor = _depositors[account];
-        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
-            return 0;
-        }
-        return depositor.shares;
-    }
-
-    function getDepositor(
-        address account
-    ) public view returns (Depositor memory depositor) {
-        depositor = _depositors[account];
-        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
-            depositor.shares = 0;
-            depositor.lastFullLiquidationIndex = 0;
-        }
-    }
-
-    /// @dev The total active (unwithdrawn) shares of the contract.
-    uint224 public totalShares;
-    /// @dev The total amount of collateral that is available to be liquidated or reclaimed.
-    uint256 public availableCollateral;
-
-    // factory address that deployed the collateral contract
+    /// @dev Address of the factory that deployed the collateral contract.
     address public immutable factory;
+
+    /// @dev The address of the collateral asset.
     address public immutable collateralAsset;
+
+    /// @dev The address of the market that the collateral contract is associated with.
     IWildcatMarket public immutable market;
+
+    /// @dev The address of the borrower of the market.
     address public immutable marketBorrower;
 
+    /// @dev The address of the underlying asset.
     address public immutable underlyingAsset;
 
-    address public immutable bebopSettlementContract;
+    /// @dev The liquidation cooldown period - minimum seconds between liquidations.
+    uint32 public constant LIQUIDATION_COOLDOWN = 3_600; // 1 hour
 
-    uint32 public immutable liquidationCooldown;
-
-    /// @dev The maximum repayment as a fraction of the delinquent debt
+    /// @dev The maximum repayment as a fraction of the delinquent debt.
     ///      105% means that the market can repay up to 5% more than the delinquent debt
     uint16 public immutable maxRepaymentBips = 10_500; // 105%
 
+    /* ========================================================================== */
+    /*                                   Storage                                  */
+    /* ========================================================================== */
+
+    /// @dev The total active (unwithdrawn) shares of the contract.
+    uint224 public totalShares;
+
+    /// @dev The total amount of collateral that is available to be liquidated or reclaimed.
+    uint256 public availableCollateral;
+
+    /// @dev The next time that a liquidation can be triggered (last liquidation + cooldown).
     uint32 public nextLiquidationTrigger;
+
+    /// @dev The number of times the contract's collateral has been fully liquidated.
+    uint32 public fullLiquidationIndex;
+
+    /// @dev Mapping of depositor addresses to their shares and last full liquidation index.
+    mapping(address account => Depositor depositor) internal _depositors;
+
+    /* ========================================================================== */
+    /*                               Events & Errors                              */
+    /* ========================================================================== */
 
     event CollateralDeposited(
         address depositor,
@@ -126,7 +121,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     event LiquidatedSharesReset(address account, uint256 sharesReset);
 
     error BadRescueAttempt(address token);
-    error BebopSwapFailed(bytes returnData);
+    error SwapFailed(bytes returnData);
     error InsufficientSwapOutput();
     error CallerNotApprovedExecutor();
     error CallerNotBorrower();
@@ -141,6 +136,11 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     error ZeroDepositAmount();
     error DivFailed();
     error InsufficientCollateral();
+    error NotApprovedExchange();
+
+    /* ========================================================================== */
+    /*                                  Modifiers                                 */
+    /* ========================================================================== */
 
     modifier onlyBorrower() {
         if (msg.sender != marketBorrower) {
@@ -160,6 +160,17 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         _;
     }
 
+    modifier onlyApprovedExchange(address exchange) {
+        if (
+            !WildcatMarketCollateralFactory(factory).isApprovedExchange(
+                exchange
+            )
+        ) {
+            revert NotApprovedExchange();
+        }
+        _;
+    }
+
     modifier marketClosed() {
         if (!market.isClosed()) {
             revert MarketNotTerminated();
@@ -174,9 +185,58 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         _;
     }
 
-    /**
-     * @dev Return the contract name "WildcatCollateralContractV1"
-     */
+    /* ========================================================================== */
+    /*                             Constructor & Name                             */
+    /* ========================================================================== */
+
+    constructor() {
+        factory = msg.sender;
+
+        CollateralParameters memory parameters = _getCollateralParameters
+            .asReturnsCollateralParameters()();
+
+        // Set asset metadata
+        collateralAsset = parameters.collateralToken;
+        market = IWildcatMarket(parameters.associatedMarket);
+        marketBorrower = parameters.borrower;
+
+        underlyingAsset = market.asset();
+    }
+
+    function _getCollateralParameters()
+        internal
+        view
+        returns (uint256 collateralParametersPointer)
+    {
+        assembly {
+            collateralParametersPointer := mload(0x40)
+            // one word worth of space for three addresses in the struct: 96 bytes = 0x60
+            mstore(0x40, add(collateralParametersPointer, 0x60))
+            // Write the selector for WildcatMarketCollateralFactory.getCollateralParameters
+            mstore(0x00, 0x5d861505)
+            // Call `getCollateralParameters` and copy the returned struct to the allocated memory
+            // buffer, reverting if the call fails or does not return the correct amount of bytes.
+            // This overrides all the ABI decoding safety checks, as the call is always made to
+            // the factory contract which will only ever return the prepared collateral parameters.
+            if iszero(
+                and(
+                    eq(returndatasize(), 0x60),
+                    staticcall(
+                        gas(),
+                        caller(),
+                        0x1c,
+                        0x04,
+                        collateralParametersPointer,
+                        0x60
+                    )
+                )
+            ) {
+                revert(0, 0)
+            }
+        }
+    }
+
+    /// @dev Return the contract name "WildcatCollateralContractV1"
     function name() external pure returns (string memory) {
         // Use yul to avoid duplicate memory allocation and reduce code size
         // Uses words at 0x20, 0x40, 0x60
@@ -195,55 +255,77 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         }
     }
 
-    function _getCollateralParameters()
-        internal
-        view
-        returns (uint256 collateralParametersPointer)
-    {
-        assembly {
-            collateralParametersPointer := mload(0x40)
-            // one word worth of space for four addresses in the struct: 128 bytes = 0x80
-            mstore(0x40, add(collateralParametersPointer, 0x80))
-            // Write the selector for WildcatMarketCollateralFactory.getCollateralParameters
-            mstore(0x00, 0x5d861505)
-            // Call `getCollateralParameters` and copy the returned struct to the allocated memory
-            // buffer, reverting if the call fails or does not return the correct amount of bytes.
-            // This overrides all the ABI decoding safety checks, as the call is always made to
-            // the factory contract which will only ever return the prepared collateral parameters.
-            if iszero(
-                and(
-                    eq(returndatasize(), 0x80),
-                    staticcall(
-                        gas(),
-                        caller(),
-                        0x1c,
-                        0x04,
-                        collateralParametersPointer,
-                        0x80
-                    )
-                )
-            ) {
-                revert(0, 0)
-            }
+    /* ========================================================================== */
+    /*                              Depositor Queries                             */
+    /* ========================================================================== */
+
+    /// @dev Internal account getter that resets shares if there has been a full liquidation since
+    ///      their last deposit. Emits `LiquidatedSharesReset` if the shares are reset.
+    function _getDepositor(
+        address account
+    ) internal returns (Depositor storage depositor) {
+        depositor = _depositors[account];
+        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
+            emit LiquidatedSharesReset(account, depositor.shares);
+            depositor.shares = 0;
+            depositor.lastFullLiquidationIndex = 0;
         }
     }
 
-    constructor() {
-        factory = msg.sender;
-
-        CollateralParameters memory parameters = _getCollateralParameters
-            .asReturnsCollateralParameters()();
-
-        // Set asset metadata
-        collateralAsset = parameters.collateralToken;
-        market = IWildcatMarket(parameters.associatedMarket);
-        marketBorrower = parameters.borrower;
-        bebopSettlementContract = parameters.bebopSettlementContract;
-
-        underlyingAsset = market.asset();
-
-        liquidationCooldown = market.delinquencyGracePeriod().toUint32();
+    /// @dev Returns the active shares of an account.
+    function sharesOf(address account) public view returns (uint256) {
+        Depositor memory depositor = _depositors[account];
+        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
+            return 0;
+        }
+        return depositor.shares;
     }
+
+    /// @dev Public view version of `_getDepositor` but without the event emitted.
+    function getDepositor(
+        address account
+    ) public view returns (Depositor memory depositor) {
+        depositor = _depositors[account];
+        if (depositor.lastFullLiquidationIndex < fullLiquidationIndex) {
+            depositor.shares = 0;
+            depositor.lastFullLiquidationIndex = 0;
+        }
+    }
+
+    /// @dev Returns the amount of collateral that can be reclaimed by an account.
+    ///      This is the portion of the account's deposited collateral that has not been
+    ///      liquidated or withdrawn.
+    function getReclaimableAmount(
+        address _account
+    ) public view returns (uint256) {
+        uint256 shares = sharesOf(_account);
+        if (shares == 0) return 0;
+        uint256 reclaimAmount = FixedPointMathLib.fullMulDiv(
+            shares,
+            availableCollateral,
+            totalShares
+        );
+
+        return reclaimAmount;
+    }
+
+    /// @dev Returns `ceil(x / d)`.
+    /// Reverts if `d` is zero.
+    /// @custom:author Solady (https://github.com/vectorized/solady/blob/main/src/utils/FixedPointMathLib.sol)
+    function divUp(uint256 x, uint256 d) internal pure returns (uint256 z) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            if iszero(d) {
+                mstore(0x00, 0x65244e4e) // `DivFailed()`.
+                revert(0x1c, 0x04)
+            }
+            z := add(iszero(iszero(mod(x, d))), div(x, d))
+        }
+    }
+
+    /* ========================================================================== */
+    /*                               Account Actions                              */
+    /* ========================================================================== */
 
     function deposit(
         uint256 _amount
@@ -283,149 +365,6 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         return true;
     }
 
-    /**
-     * @dev Token rescue function for recovering tokens sent to the contract
-     *      contract by mistake or otherwise outside of the normal course of
-     *      operation.
-     *
-     *      Only the borrower can rescue tokens from the contract.
-     *
-     *      The underlying asset can only be rescued if the market is closed; if the market
-     *      is open, any balance in the underlying asset is transferred to the market.
-     *
-     *      The collateral asset can be rescued if the balance is greater than the expected available collateral.
-     */
-    function rescueTokens(address token) public onlyBorrower nonReentrant {
-        uint256 tokenBalance = token.balanceOf(address(this));
-        // The collateral asset can only be rescued if the balance is greater than the expected available collateral.
-        if (token == collateralAsset) {
-            tokenBalance = tokenBalance.satSub(availableCollateral);
-        }
-
-        if (tokenBalance == 0) revert ZeroTokenBalance();
-
-        // The liquidation process will always repay 100% of underlying assets received from bebop;
-        // however, if the market is open and the underlying token is sent by mistake, it will simply
-        // be sent to the market and treated as a repayment.
-        if (token == underlyingAsset) {
-            if (!market.isClosed()) {
-                underlyingAsset.safeTransfer(address(market), tokenBalance);
-                market.repayAndProcessUnpaidWithdrawalBatches(0, 0);
-                emit UnderlyingAssetSentToMarket(tokenBalance);
-                return;
-            }
-        }
-
-        token.safeTransfer(msg.sender, tokenBalance);
-        emit TokenRescued(token, tokenBalance);
-    }
-
-    function getMarketDelinquencyStatus()
-        public
-        view
-        returns (bool marketInPenalty, uint256 delinquentDebt)
-    {
-        MarketState memory state = market.currentState();
-        if (state.isClosed) revert MarketTerminated();
-
-        // Check whether market delinquency timer is past the grace period
-        marketInPenalty = state.timeDelinquent > liquidationCooldown;
-
-        uint256 coverageLiquidity = state.liquidityRequired();
-        uint256 marketTotalAssets = underlyingAsset.balanceOf(address(market));
-
-        delinquentDebt = coverageLiquidity.satSub(marketTotalAssets);
-    }
-
-    /// @dev Sells collateral and repays delinquent debt of the market through Bebop PMM
-    ///      Requires that the underlying token is supported by Bebop PMM via this list:
-    ///      https://api.bebop.xyz/pmm/ethereum/v3/token-info
-    ///
-    /// NOTE: The amount of the underlying asset received MUST NOT exceed the market's
-    ///       delinquent debt multiplied by the max repayment fraction.
-    ///
-    /// @param quoteCalldata The calldata for the Bebop PMM quote
-    /// @param lengthWithdrawalQueue The number of withdrawal batches to process
-    /// @param maxCollateralToLiquidate The maximum amount of collateral to liquidate
-    /// @param minUnderlyingOut The minimum amount of underlying asset to receive
-    function liquidateCollateral(
-        bytes calldata quoteCalldata,
-        uint lengthWithdrawalQueue,
-        uint maxCollateralToLiquidate,
-        uint minUnderlyingOut
-    )
-        public
-        onlyApprovedExecutor
-        nonReentrant
-        returns (uint underlyingAmountReceived)
-    {
-        (
-            bool marketInPenalty,
-            uint delinquentDebt
-        ) = getMarketDelinquencyStatus();
-
-        // Ensure the market is in penalty state, there is no active cooldown, and
-        // there is enough collateral for the liquidation
-        if (!marketInPenalty || delinquentDebt == 0)
-            revert MarketNotInPenalty();
-        if (block.timestamp < nextLiquidationTrigger)
-            revert LiquidationInCooldown();
-        if (maxCollateralToLiquidate > availableCollateral)
-            revert InsufficientCollateral();
-
-        // Calculate the maximum repayment amount
-        uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
-
-        // Approve the Bebop settlement contract to spend the collateral
-        collateralAsset.safeApprove(
-            address(bebopSettlementContract),
-            maxCollateralToLiquidate
-        );
-
-        uint beforeBalance = collateralAsset.balanceOf(address(this));
-        (bool success, bytes memory data) = bebopSettlementContract.call(
-            quoteCalldata
-        );
-        if (!success) revert BebopSwapFailed(data);
-        collateralAsset.safeApprove(address(bebopSettlementContract), 0);
-
-        uint afterBalance = collateralAsset.balanceOf(address(this));
-
-        underlyingAmountReceived = underlyingAsset.balanceOf(address(this));
-
-        if (underlyingAmountReceived < minUnderlyingOut)
-            revert InsufficientSwapOutput();
-
-        if (underlyingAmountReceived > maxRepayment)
-            revert MaxRepaymentExceeded();
-
-        // Transfer underlying asset to the market and process repayment.
-        underlyingAsset.safeTransfer(address(market), underlyingAmountReceived);
-        market.repayAndProcessUnpaidWithdrawalBatches(0, lengthWithdrawalQueue);
-
-        nextLiquidationTrigger =
-            block.timestamp.toUint32() +
-            liquidationCooldown;
-
-        uint collateralLiquidated = beforeBalance - afterBalance;
-        emit Liquidation(
-            msg.sender,
-            collateralLiquidated,
-            underlyingAmountReceived
-        );
-
-        availableCollateral -= collateralLiquidated;
-
-        // If the contract has no available collateral, reset the shares and last liquidated deposit index
-        // to avoid inflating the share price of future deposits. Any deposits prior to the last full
-        // liquidation will have their shares reset to 0.
-        if (availableCollateral == 0) {
-            totalShares = 0;
-            fullLiquidationIndex += 1;
-            emit FullLiquidation(fullLiquidationIndex);
-        }
-    }
-
     function reclaimCollateral() public marketClosed nonReentrant {
         Depositor storage depositor = _getDepositor(msg.sender);
 
@@ -449,34 +388,143 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         emit CollateralReclaimed(msg.sender, shares, reclaimAmount);
     }
 
-    /// @dev Returns the amount of collateral that can be reclaimed by an
-    ///      account. This is the portion of the account's deposited collateral
-    ///      that has not been liquidated or withdrawn.
-    function getReclaimableAmount(
-        address _account
-    ) public view returns (uint256) {
-        uint256 shares = sharesOf(_account);
-        if (shares == 0) return 0;
-        uint256 reclaimAmount = FixedPointMathLib.fullMulDiv(
-            shares,
-            availableCollateral,
-            totalShares
-        );
+    /* ========================================================================== */
+    /*                          Global Queries & Actions                          */
+    /* ========================================================================== */
 
-        return reclaimAmount;
+    function getMarketDelinquencyStatus()
+        public
+        view
+        returns (bool marketInPenalty, uint256 delinquentDebt)
+    {
+        MarketState memory state = market.currentState();
+        if (state.isClosed) revert MarketTerminated();
+
+        // Check whether market delinquency timer is past the grace period
+        marketInPenalty = state.timeDelinquent > LIQUIDATION_COOLDOWN;
+
+        uint256 coverageLiquidity = state.liquidityRequired();
+        uint256 marketTotalAssets = underlyingAsset.balanceOf(address(market));
+
+        delinquentDebt = coverageLiquidity.satSub(marketTotalAssets);
     }
 
-    /// @dev Returns `ceil(x / d)`.
-    /// Reverts if `d` is zero.
-    /// @custom:author Solady (https://github.com/vectorized/solady/blob/main/src/utils/FixedPointMathLib.sol)
-    function divUp(uint256 x, uint256 d) internal pure returns (uint256 z) {
-        /// @solidity memory-safe-assembly
-        assembly {
-            if iszero(d) {
-                mstore(0x00, 0x65244e4e) // `DivFailed()`.
-                revert(0x1c, 0x04)
-            }
-            z := add(iszero(iszero(mod(x, d))), div(x, d))
+    /// @dev Sells collateral and repays delinquent debt of the market through an approved exchange.
+    ///
+    /// @param exchange The exchange to use for the liquidation.
+    /// @param quoteCalldata The calldata for the swap.
+    /// @param lengthWithdrawalQueue The number of withdrawal batches to process
+    /// @param maxCollateralToLiquidate The maximum amount of collateral to liquidate
+    /// @param minUnderlyingOut The minimum amount of underlying asset to receive
+    function liquidateCollateral(
+        address exchange,
+        bytes calldata quoteCalldata,
+        uint lengthWithdrawalQueue,
+        uint maxCollateralToLiquidate,
+        uint minUnderlyingOut
+    )
+        public
+        onlyApprovedExecutor
+        onlyApprovedExchange(exchange)
+        nonReentrant
+        returns (uint underlyingAmountReceived)
+    {
+        (
+            bool marketInPenalty,
+            uint delinquentDebt
+        ) = getMarketDelinquencyStatus();
+
+        // Ensure the market is in penalty state, there is no active cooldown, and
+        // there is enough collateral for the liquidation
+        if (!marketInPenalty || delinquentDebt == 0)
+            revert MarketNotInPenalty();
+        if (block.timestamp < nextLiquidationTrigger)
+            revert LiquidationInCooldown();
+        if (maxCollateralToLiquidate > availableCollateral)
+            revert InsufficientCollateral();
+
+        // Calculate the maximum repayment amount
+        uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
+
+        // Approve the exchange contract to spend the collateral
+        collateralAsset.safeApprove(exchange, maxCollateralToLiquidate);
+
+        uint beforeBalance = collateralAsset.balanceOf(address(this));
+        (bool success, bytes memory data) = exchange.call(quoteCalldata);
+        if (!success) revert SwapFailed(data);
+        collateralAsset.safeApprove(exchange, 0);
+
+        uint afterBalance = collateralAsset.balanceOf(address(this));
+
+        underlyingAmountReceived = underlyingAsset.balanceOf(address(this));
+
+        if (underlyingAmountReceived < minUnderlyingOut)
+            revert InsufficientSwapOutput();
+
+        if (underlyingAmountReceived > maxRepayment)
+            revert MaxRepaymentExceeded();
+
+        // Transfer underlying asset to the market and process repayment.
+        underlyingAsset.safeTransfer(address(market), underlyingAmountReceived);
+        market.repayAndProcessUnpaidWithdrawalBatches(0, lengthWithdrawalQueue);
+
+        nextLiquidationTrigger =
+            block.timestamp.toUint32() +
+            LIQUIDATION_COOLDOWN;
+
+        uint collateralLiquidated = beforeBalance - afterBalance;
+        emit Liquidation(
+            msg.sender,
+            collateralLiquidated,
+            underlyingAmountReceived
+        );
+
+        availableCollateral -= collateralLiquidated;
+
+        // If the contract has no available collateral, reset the shares and last liquidated deposit index
+        // to avoid inflating the share price of future deposits. Any deposits prior to the last full
+        // liquidation will have their shares reset to 0.
+        if (availableCollateral == 0) {
+            totalShares = 0;
+            fullLiquidationIndex += 1;
+            emit FullLiquidation(fullLiquidationIndex);
         }
+    }
+
+    /**
+     * @dev Token rescue function for recovering tokens sent to the contract
+     *      contract by mistake or otherwise outside of the normal course of
+     *      operation.
+     *
+     *      Only the borrower can rescue tokens from the contract.
+     *
+     *      The underlying asset can only be rescued if the market is closed; if the market
+     *      is open, any balance in the underlying asset is transferred to the market.
+     *
+     *      The collateral asset can be rescued if the balance is greater than the expected available collateral.
+     */
+    function rescueTokens(address token) public onlyBorrower nonReentrant {
+        uint256 tokenBalance = token.balanceOf(address(this));
+        // The collateral asset can only be rescued if the balance is greater than the expected available collateral.
+        if (token == collateralAsset) {
+            tokenBalance = tokenBalance.satSub(availableCollateral);
+        }
+
+        if (tokenBalance == 0) revert ZeroTokenBalance();
+
+        // The liquidation process will always repay 100% of underlying assets received from the exchange;
+        // however, if the market is open and the underlying token is sent by mistake, it will simply
+        // be sent to the market and treated as a repayment.
+        if (token == underlyingAsset) {
+            if (!market.isClosed()) {
+                underlyingAsset.safeTransfer(address(market), tokenBalance);
+                market.repayAndProcessUnpaidWithdrawalBatches(0, 0);
+                emit UnderlyingAssetSentToMarket(tokenBalance);
+                return;
+            }
+        }
+
+        token.safeTransfer(msg.sender, tokenBalance);
+        emit TokenRescued(token, tokenBalance);
     }
 }

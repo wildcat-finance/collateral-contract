@@ -10,6 +10,32 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
     /*                              Approve Executors                             */
     /* -------------------------------------------------------------------------- */
 
+    function test_name() external {
+        string memory factoryName = factory.name();
+        console.log("factoryName");
+        console.log(factoryName);
+        assertEq(factory.name(), "WildcatCollateralFactoryV1", "factory name");
+        assertEq(collateral.name(), "WildcatCollateralContractV1", "collateral name");
+    }
+
+    function test_deployCollateralContract_MarketNotRegistered() external {
+        archController.unregisterMarket(address(market));
+        vm.expectRevert(
+                WildcatMarketCollateralFactory.MarketNotRegistered.selector
+        );
+        factory.deployCollateralContract(address(market), address(collateralAsset));
+    }
+
+    function test_deployCollateralContract_NotBorrower() external {
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                WildcatMarketCollateralFactory.NotBorrower.selector
+            )
+        );
+        factory.deployCollateralContract(address(market), address(collateralAsset));
+    }
+
     function test_approveExecutor() external {
         vm.expectEmit(address(factory));
         emit WildcatMarketCollateralFactory.ExecutorApproved(address(this));
@@ -27,6 +53,12 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         factory.approveExecutor(address(1));
+    }
+
+    function test_removeExecutor_NotApprovedExecutor() external {
+        assertEq(factory.isApprovedExecutor(address(this)), false);
+        factory.removeExecutor(address(this));
+        assertEq(factory.isApprovedExecutor(address(this)), false);
     }
 
     function test_removeExecutor() external {
@@ -47,6 +79,64 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         factory.removeExecutor(address(1));
+    }
+
+    function test_getApprovedExecutors() external {
+        address[] memory approvedExecutors = factory.getApprovedExecutors();
+        assertEq(approvedExecutors.length, 1);
+        assertEq(approvedExecutors[0], executor);
+        approvedExecutors = factory.getApprovedExecutors(0, 1);
+        assertEq(approvedExecutors.length, 1);
+        assertEq(approvedExecutors[0], executor);
+        assertEq(factory.getApprovedExecutorsCount(), 1);
+    }
+    
+    function test_approveExchange() external {
+        vm.expectEmit(address(factory));
+        emit WildcatMarketCollateralFactory.ExchangeApproved(address(1));
+        factory.approveExchange(address(1));
+        assertEq(factory.isApprovedExchange(address(1)), true);
+    }
+
+    function test_approveExchange_CallerNotArchControllerOwner() external {
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                WildcatMarketCollateralFactory.CallerNotArchControllerOwner.selector
+            )
+        );
+        factory.approveExchange(address(1));
+    }
+
+    function test_removeExchange_NotApprovedExchange() external {
+        assertEq(factory.isApprovedExchange(address(1)), false);
+        factory.removeExchange(address(1));
+        assertEq(factory.isApprovedExchange(address(1)), false);
+    }
+
+    function test_removeExchange() external {
+        factory.approveExchange(address(1));
+        vm.expectEmit(address(factory));
+        emit WildcatMarketCollateralFactory.ExchangeRemoved(address(1));
+        factory.removeExchange(address(1));
+        assertEq(factory.isApprovedExchange(address(1)), false);
+    }
+
+    function test_getApprovedExchanges() external {
+        address[] memory approvedExchanges = factory.getApprovedExchanges();
+        assertEq(approvedExchanges.length, 1);
+        assertEq(approvedExchanges[0], bebop);
+        approvedExchanges = factory.getApprovedExchanges(0, 1);
+        assertEq(approvedExchanges.length, 1);
+        assertEq(approvedExchanges[0], bebop);
+        assertEq(factory.getApprovedExchangesCount(), 1);
+
+        factory.removeExchange(bebop);
+        approvedExchanges = factory.getApprovedExchanges();
+        assertEq(approvedExchanges.length, 0);
+        approvedExchanges = factory.getApprovedExchanges(0, 1);
+        assertEq(approvedExchanges.length, 0);
+        assertEq(factory.getApprovedExchangesCount(), 0);
     }
 
     /* -------------------------------------------------------------------------- */
@@ -137,7 +227,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                     .selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_MarketNotInPenalty() external {
@@ -149,7 +239,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.MarketNotInPenalty.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
         // Market in penalty but delinquent debt is 0 causes revert
         _updateDelinquency(0, true, false);
         vm.prank(executor);
@@ -158,7 +248,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.MarketNotInPenalty.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_MarketTerminated() external {
@@ -169,7 +259,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.MarketTerminated.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_InsufficientSwapOutput() external {
@@ -187,6 +277,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 11 ether,
             maxCollateralToLiquidate: 10 ether,
@@ -194,7 +285,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
     }
 
-    function test_liquidateCollateral_BebopSwapFailed() external {
+    function test_liquidateCollateral_SwapFailed() external {
         _deposit(100 ether);
         _updateDelinquency(10 ether, true, true);
         bytes memory data = _encodeExecute({
@@ -205,11 +296,12 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         vm.prank(executor);
         vm.expectRevert(
             abi.encodeWithSelector(
-                SimpleMarketCollateralMultiParty.BebopSwapFailed.selector,
+                SimpleMarketCollateralMultiParty.SwapFailed.selector,
                 hex""
             )
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 11 ether,
             maxCollateralToLiquidate: 10 ether,
@@ -232,6 +324,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 10 ether,
             maxCollateralToLiquidate: 10 ether,
@@ -274,6 +367,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             101 ether
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 101 ether,
             maxCollateralToLiquidate: 100 ether,
@@ -296,6 +390,16 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         );
     }
 
+    function test_liquidateCollateral_NotApprovedExchange() external {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.NotApprovedExchange.selector
+            )
+        );
+        vm.prank(executor);
+        collateral.liquidateCollateral(address(1), "", 0, 0, 0);
+    }
+
     function test_liquidateCollateral_LiquidationInCooldown() external {
         _deposit(100 ether);
         _fullLiquidation({
@@ -312,7 +416,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.LiquidationInCooldown.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     /// Test that deposits are not penalized for prior liquidations

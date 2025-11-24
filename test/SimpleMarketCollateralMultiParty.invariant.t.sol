@@ -12,6 +12,7 @@ contract CollateralHandler {
     address executor;
     Vm private vm;
     BaseTest test;
+    address bebop;
     uint public ghost_zeroLiquidations;
 
     mapping(bytes32 => uint256) public calls;
@@ -38,21 +39,23 @@ contract CollateralHandler {
         MockERC20 _collateralAsset,
         MockWildcatMarket _market,
         address _executor,
+        address _bebop,
         BaseTest _test
     ) {
         collateral = _collateral;
         collateralAsset = _collateralAsset;
         market = _market;
         executor = _executor;
+        bebop = _bebop;
         test = _test;
         vm = Vm(
             address(bytes20(uint160(uint256(keccak256("hevm cheat code")))))
         );
     }
 
-    // function closeMarket() public {
-    //     market.setState(100 ether, 100 ether, false, 0, true);
-    // }
+    function closeMarket() public {
+        market.setState(100 ether, 100 ether, false, 0, true);
+    }
 
     function _hem(
         uint256 x,
@@ -178,6 +181,7 @@ contract CollateralHandler {
         // Execute liquidation
         vm.prank(executor);
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: underlyingOut,
             maxCollateralToLiquidate: collateralToLiquidate,
@@ -217,6 +221,7 @@ contract SimpleMarketCollateralMultiPartyInvariantTest is BaseTest {
             collateralAsset,
             market,
             executor,
+            bebop,
             this
         );
 
