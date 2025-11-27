@@ -402,16 +402,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         view
         returns (bool marketInPenalty, uint256 delinquentDebt)
     {
-        MarketState memory state = market.currentState();
-        if (state.isClosed) revert MarketTerminated();
-
-        // Check whether market delinquency timer is past the grace period
-        marketInPenalty = state.timeDelinquent > LIQUIDATION_COOLDOWN;
-
-        uint256 coverageLiquidity = state.liquidityRequired();
-        uint256 marketTotalAssets = underlyingAsset.balanceOf(address(market));
-
-        delinquentDebt = coverageLiquidity.satSub(marketTotalAssets);
+        (marketInPenalty, delinquentDebt, ) = _getDelinquencyWithState();
     }
 
     function _getDelinquencyWithState()
@@ -451,40 +442,38 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         nonReentrant
         returns (uint underlyingAmountReceived)
     {
-        (
-            bool marketInPenalty,
-            uint delinquentDebt,
-            MarketState memory state
-        ) = _getDelinquencyWithState();
+        uint maxRepayment;
+        RepayThresholds memory thresholds;
+        {
+            bool marketInPenalty;
+            uint delinquentDebt;
+            MarketState memory state;
+            (marketInPenalty, delinquentDebt, state) = _getDelinquencyWithState();
 
-        // Ensure the market is in penalty state, there is no active cooldown, and
-        // there is enough collateral for the liquidation
-        if (!marketInPenalty || delinquentDebt == 0)
-            revert MarketNotInPenalty();
-        if (block.timestamp < nextLiquidationTrigger)
-            revert LiquidationInCooldown();
-        if (maxCollateralToLiquidate > availableCollateral)
-            revert InsufficientCollateral();
+            // Ensure the market is in penalty state, there is no active cooldown, and
+            // there is enough collateral for the liquidation
+            if (!marketInPenalty || delinquentDebt == 0)
+                revert MarketNotInPenalty();
+            if (block.timestamp < nextLiquidationTrigger)
+                revert LiquidationInCooldown();
+            if (maxCollateralToLiquidate > availableCollateral)
+                revert InsufficientCollateral();
 
-        // Calculate the maximum repayment amount
-        uint maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
-        RepayThresholds memory thresholds = _computeRepaymentThresholds(
-            state,
-            underlyingAsset.balanceOf(address(market)),
-            true
+            // Calculate the maximum repayment amount
+            maxRepayment = delinquentDebt.bipMul(maxRepaymentBips);
+            thresholds = _computeRepaymentThresholds(
+                state,
+                underlyingAsset.balanceOf(address(market))
+            );
+        }
+
+        (uint collateralLiquidated, uint underlyingReceived) = _executeLiquidationSwap(
+            exchange,
+            quoteCalldata,
+            maxCollateralToLiquidate
         );
 
-        // Approve the exchange contract to spend the collateral
-        collateralAsset.safeApprove(exchange, maxCollateralToLiquidate);
-
-        uint beforeBalance = collateralAsset.balanceOf(address(this));
-        (bool success, bytes memory data) = exchange.call(quoteCalldata);
-        if (!success) revert SwapFailed(data);
-        collateralAsset.safeApprove(exchange, 0);
-
-        uint afterBalance = collateralAsset.balanceOf(address(this));
-
-        underlyingAmountReceived = underlyingAsset.balanceOf(address(this));
+        underlyingAmountReceived = underlyingReceived;
 
         if (underlyingAmountReceived < minUnderlyingOut)
             revert InsufficientSwapOutput();
@@ -506,7 +495,6 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
             block.timestamp.toUint32() +
             LIQUIDATION_COOLDOWN;
 
-        uint collateralLiquidated = beforeBalance - afterBalance;
         emit Liquidation(
             msg.sender,
             collateralLiquidated,
@@ -527,17 +515,45 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
     function _computeRepaymentThresholds(
         MarketState memory state,
-        uint256 totalAssetsBeforeRepay,
-        bool includePending
+        uint256 totalAssetsBeforeRepay
     ) internal pure returns (RepayThresholds memory thresholds) {
         uint256 baseLiabilities =
             state.accruedProtocolFees +
             state.normalizedUnclaimedWithdrawals;
         thresholds.minRepay = baseLiabilities.satSub(totalAssetsBeforeRepay);
         thresholds.minAtomicRepay = thresholds.minRepay;
-        if (includePending && state.scaledPendingWithdrawals > 0) {
-            thresholds.minAtomicRepay += state.normalizeAmount(state.scaledPendingWithdrawals);
+        if (state.scaledPendingWithdrawals > 0) {
+            thresholds.minAtomicRepay += state.normalizeAmount(
+                state.scaledPendingWithdrawals
+            );
         }
+    }
+
+    function _executeLiquidationSwap(
+        address exchange,
+        bytes calldata quoteCalldata,
+        uint256 maxCollateralToLiquidate
+    )
+        internal
+        returns (uint256 collateralLiquidated, uint256 underlyingReceived)
+    {
+        uint collateralBalanceBefore = collateralAsset.balanceOf(address(this));
+        uint underlyingBalanceBefore = underlyingAsset.balanceOf(address(this));
+
+        // Approve the exchange contract to spend the collateral
+        collateralAsset.safeApprove(exchange, maxCollateralToLiquidate);
+
+        (bool success, bytes memory data) = exchange.call(quoteCalldata);
+        if (!success) revert SwapFailed(data);
+
+        collateralAsset.safeApprove(exchange, 0);
+
+        collateralLiquidated =
+            collateralBalanceBefore -
+            collateralAsset.balanceOf(address(this));
+        underlyingReceived =
+            underlyingAsset.balanceOf(address(this)) -
+            underlyingBalanceBefore;
     }
 
     /**
