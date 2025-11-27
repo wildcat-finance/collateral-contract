@@ -41,9 +41,7 @@ contract BaseTest is Test {
     CollateralExpectations public expectations;
 
     function addDepositor(address depositor, uint256 depositAmount) public {
-        if (
-            !expectations.hasDeposited[depositor]
-        ) {
+        if (!expectations.hasDeposited[depositor]) {
             expectations.depositors.push(depositor);
             expectations.hasDeposited[depositor] = true;
         }
@@ -126,25 +124,31 @@ contract BaseTest is Test {
         archController = new MockWildcatArchController(address(this));
         vm.etch(bebop, type(MockBebop).runtimeCode);
         (address initCodeStorage, uint256 initCodeHash) = _storeInitCode();
+        address[] memory initialExchanges = new address[](1);
+        initialExchanges[0] = bebop;
+        address[] memory initialExecutors = new address[](1);
+        initialExecutors[0] = executor;
         factory = new WildcatMarketCollateralFactory(
             address(archController),
             initCodeStorage,
-            initCodeHash
+            initCodeHash,
+            initialExchanges,
+            initialExecutors
         );
-        factory.approveExecutor(executor);
         underlyingAsset = new MockERC20("Token", "TKN", 18);
         market = new MockWildcatMarket(
             address(this),
             address(underlyingAsset),
             1 days
         );
-        liquidationCooldown = market.delinquencyGracePeriod();
+        archController.registerMarket(address(market));
+        liquidationCooldown = 3_600;
         collateralAsset = new MockERC20("Collateral", "CLT", 18);
         collateralAsset.mint(address(this), 1000000 ether);
         collateral = SimpleMarketCollateralMultiParty(
             factory.deployCollateralContract(
-                address(collateralAsset),
-                address(market)
+                address(market),
+                address(collateralAsset)
             )
         );
         assertEq(
@@ -172,6 +176,55 @@ contract BaseTest is Test {
         vm.label(address(underlyingAsset), "UnderlyingAsset");
         vm.label(address(collateralAsset), "CollateralAsset");
         vm.label(address(bebop), "Bebop");
+
+        address[] memory collateralContracts = factory
+            .getCollateralContractsForMarket(address(market));
+        assertEq(
+            collateralContracts.length,
+            1,
+            "Collateral contracts length mismatch"
+        );
+        assertEq(
+            collateralContracts[0],
+            address(collateral),
+            "Collateral contract address mismatch"
+        );
+        assertEq(
+            collateralContracts[0],
+            factory.calculateCollateralContractAddress(
+                address(market),
+                address(collateralAsset)
+            ),
+            "Collateral contract address mismatch"
+        );
+        assertEq(
+            factory.getCollateralContractsForMarketCount(address(market)),
+            1,
+            "Collateral contracts count mismatch"
+        );
+        collateralContracts = factory.getCollateralContractsForMarket(
+            address(market),
+            0,
+            1
+        );
+        assertEq(
+            collateralContracts.length,
+            1,
+            "Collateral contracts length mismatch"
+        );
+        assertEq(
+            collateralContracts[0],
+            address(collateral),
+            "Collateral contract address mismatch"
+        );
+        assertEq(
+            collateralContracts[0],
+            factory.calculateCollateralContractAddress(
+                address(market),
+                address(collateralAsset)
+            ),
+            "Collateral contract address mismatch"
+        );
     }
 
     function _deposit(address account, uint256 amount) internal {
@@ -299,6 +352,7 @@ contract BaseTest is Test {
         );
         vm.prank(executor);
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: minUnderlyingOut,
             maxCollateralToLiquidate: collateralApproved,
