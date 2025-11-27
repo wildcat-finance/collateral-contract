@@ -314,8 +314,6 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         return reclaimAmount;
     }
 
-    /// This appears to be unused now. 
-
     /// @dev Returns `ceil(x / d)`.
     /// Reverts if `d` is zero.
     /// @custom:author Solady (https://github.com/vectorized/solady/blob/main/src/utils/FixedPointMathLib.sol)
