@@ -6,9 +6,13 @@ import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 
 contract MockWildcatMarket {
     MarketState internal _state;
+    uint256 public lastAvailableLiquidity;
+    uint128 public pendingNormalizedUnclaimed;
+    uint128 public pendingAccruedProtocolFees;
 
     address public borrower;
     address public asset;
+    address public sentinel;
     uint256 public delinquencyGracePeriod;
 
     event Repayment(uint256 amount, uint256 batches);
@@ -16,10 +20,12 @@ contract MockWildcatMarket {
     constructor(
         address _borrower,
         address _asset,
+        address _sentinel,
         uint256 _delinquencyGracePeriod
     ) {
         borrower = _borrower;
         asset = _asset;
+        sentinel = _sentinel;
         delinquencyGracePeriod = _delinquencyGracePeriod;
         _state.scaleFactor = 1e27;
         _state.reserveRatioBips = 10_000;
@@ -37,7 +43,49 @@ contract MockWildcatMarket {
         uint256 repayAmount,
         uint256 maxBatches
     ) public {
+        if (repayAmount > 0) {
+            bool success = MockERC20(asset).transferFrom(
+                msg.sender,
+                address(this),
+                repayAmount
+            );
+            require(success, "TRANSFER_FAILED");
+        }
+
+        uint256 liabilities = uint256(_state.normalizedUnclaimedWithdrawals) +
+            _state.accruedProtocolFees;
+
+        liabilities += pendingNormalizedUnclaimed + pendingAccruedProtocolFees;
+
+        uint256 availableLiquidity = totalAssets() - liabilities;
+        lastAvailableLiquidity = availableLiquidity;
+
         emit Repayment(repayAmount, maxBatches);
+    }
+
+    function updateState() external {
+        _state.normalizedUnclaimedWithdrawals += pendingNormalizedUnclaimed;
+        _state.accruedProtocolFees += pendingAccruedProtocolFees;
+        _state.scaledPendingWithdrawals = 0;
+        pendingNormalizedUnclaimed = 0;
+        pendingAccruedProtocolFees = 0;
+    }
+
+    function setPendingAccruals(
+        uint128 normalizedUnclaimedDelta,
+        uint128 accruedFeesDelta
+    ) external {
+        pendingNormalizedUnclaimed = normalizedUnclaimedDelta;
+        pendingAccruedProtocolFees = accruedFeesDelta;
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return MockERC20(asset).balanceOf(address(this));
+    }
+
+    function setAccountingState(uint128 normalizedUnclaimedWithdrawals, uint128 accruedProtocolFees) external {
+        _state.normalizedUnclaimedWithdrawals = normalizedUnclaimedWithdrawals;
+        _state.accruedProtocolFees = accruedProtocolFees;
     }
 
     function isClosed() public view returns (bool) {

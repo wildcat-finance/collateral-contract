@@ -2,14 +2,40 @@
 pragma solidity >=0.8.20;
 
 import "./BaseTest.sol";
+import "v2-protocol/libraries/MarketState.sol";
 
 using MathUtils for uint256;
 
 contract SimpleMarketCollateralMultiPartyTest is BaseTest {
-
     /* -------------------------------------------------------------------------- */
     /*                              Approve Executors                             */
     /* -------------------------------------------------------------------------- */
+
+    function test_name() external {
+        string memory factoryName = factory.name();
+        console.log("factoryName");
+        console.log(factoryName);
+        assertEq(factory.name(), "WildcatCollateralFactoryV1", "factory name");
+        assertEq(collateral.name(), "WildcatCollateralContractV1", "collateral name");
+    }
+
+    function test_deployCollateralContract_MarketNotRegistered() external {
+        archController.unregisterMarket(address(market));
+        vm.expectRevert(
+                WildcatMarketCollateralFactory.MarketNotRegistered.selector
+        );
+        factory.deployCollateralContract(address(market), address(collateralAsset));
+    }
+
+    function test_deployCollateralContract_NotBorrower() external {
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                WildcatMarketCollateralFactory.NotBorrower.selector
+            )
+        );
+        factory.deployCollateralContract(address(market), address(collateralAsset));
+    }
 
     function test_approveExecutor() external {
         vm.expectEmit(address(factory));
@@ -30,6 +56,12 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         factory.approveExecutor(address(1));
     }
 
+    function test_removeExecutor_NotApprovedExecutor() external {
+        assertEq(factory.isApprovedExecutor(address(this)), false);
+        factory.removeExecutor(address(this));
+        assertEq(factory.isApprovedExecutor(address(this)), false);
+    }
+
     function test_removeExecutor() external {
         factory.approveExecutor(address(this));
         vm.expectEmit(address(factory));
@@ -48,6 +80,64 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         factory.removeExecutor(address(1));
+    }
+
+    function test_getApprovedExecutors() external {
+        address[] memory approvedExecutors = factory.getApprovedExecutors();
+        assertEq(approvedExecutors.length, 1);
+        assertEq(approvedExecutors[0], executor);
+        approvedExecutors = factory.getApprovedExecutors(0, 1);
+        assertEq(approvedExecutors.length, 1);
+        assertEq(approvedExecutors[0], executor);
+        assertEq(factory.getApprovedExecutorsCount(), 1);
+    }
+    
+    function test_approveExchange() external {
+        vm.expectEmit(address(factory));
+        emit WildcatMarketCollateralFactory.ExchangeApproved(address(1));
+        factory.approveExchange(address(1));
+        assertEq(factory.isApprovedExchange(address(1)), true);
+    }
+
+    function test_approveExchange_CallerNotArchControllerOwner() external {
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                WildcatMarketCollateralFactory.CallerNotArchControllerOwner.selector
+            )
+        );
+        factory.approveExchange(address(1));
+    }
+
+    function test_removeExchange_NotApprovedExchange() external {
+        assertEq(factory.isApprovedExchange(address(1)), false);
+        factory.removeExchange(address(1));
+        assertEq(factory.isApprovedExchange(address(1)), false);
+    }
+
+    function test_removeExchange() external {
+        factory.approveExchange(address(1));
+        vm.expectEmit(address(factory));
+        emit WildcatMarketCollateralFactory.ExchangeRemoved(address(1));
+        factory.removeExchange(address(1));
+        assertEq(factory.isApprovedExchange(address(1)), false);
+    }
+
+    function test_getApprovedExchanges() external {
+        address[] memory approvedExchanges = factory.getApprovedExchanges();
+        assertEq(approvedExchanges.length, 1);
+        assertEq(approvedExchanges[0], bebop);
+        approvedExchanges = factory.getApprovedExchanges(0, 1);
+        assertEq(approvedExchanges.length, 1);
+        assertEq(approvedExchanges[0], bebop);
+        assertEq(factory.getApprovedExchangesCount(), 1);
+
+        factory.removeExchange(bebop);
+        approvedExchanges = factory.getApprovedExchanges();
+        assertEq(approvedExchanges.length, 0);
+        approvedExchanges = factory.getApprovedExchanges(0, 1);
+        assertEq(approvedExchanges.length, 0);
+        assertEq(factory.getApprovedExchangesCount(), 0);
     }
 
     /* -------------------------------------------------------------------------- */
@@ -78,6 +168,27 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         collateral.deposit(0);
+    }
+
+    function test_deposit_SanctionedSender() external {
+        address depositor = address(0xBEEF);
+        uint256 amount = 100 ether;
+        collateralAsset.mint(depositor, amount);
+        vm.prank(depositor);
+        collateralAsset.approve(address(collateral), amount);
+        sanctionsSentinel.setSanctioned(
+            collateral.marketBorrower(),
+            depositor,
+            true
+        );
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.SanctionedAccount.selector,
+                depositor
+            )
+        );
+        collateral.deposit(amount);
     }
 
     /* -------------------------------------------------------------------------- */
@@ -138,7 +249,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                     .selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_MarketNotInPenalty() external {
@@ -150,7 +261,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.MarketNotInPenalty.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
         // Market in penalty but delinquent debt is 0 causes revert
         _updateDelinquency(0, true, false);
         vm.prank(executor);
@@ -159,7 +270,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.MarketNotInPenalty.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_MarketTerminated() external {
@@ -170,7 +281,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.MarketTerminated.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_InsufficientSwapOutput() external {
@@ -188,6 +299,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 11 ether,
             maxCollateralToLiquidate: 10 ether,
@@ -195,7 +307,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
     }
 
-    function test_liquidateCollateral_BebopSwapFailed() external {
+    function test_liquidateCollateral_SwapFailed() external {
         _deposit(100 ether);
         _updateDelinquency(10 ether, true, true);
         bytes memory data = _encodeExecute({
@@ -206,11 +318,12 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         vm.prank(executor);
         vm.expectRevert(
             abi.encodeWithSelector(
-                SimpleMarketCollateralMultiParty.BebopSwapFailed.selector,
+                SimpleMarketCollateralMultiParty.SwapFailed.selector,
                 hex""
             )
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 11 ether,
             maxCollateralToLiquidate: 10 ether,
@@ -233,9 +346,29 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             )
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 10 ether,
             maxCollateralToLiquidate: 10 ether,
+            lengthWithdrawalQueue: 0
+        });
+    }
+
+    function test_liquidateCollateral_InsufficientCollateral() external {
+        _deposit(1 ether);
+        _updateDelinquency(1 ether, true, true);
+
+        vm.prank(executor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.InsufficientCollateral.selector
+            )
+        );
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: "",
+            minUnderlyingOut: 0,
+            maxCollateralToLiquidate: 2 ether,
             lengthWithdrawalQueue: 0
         });
     }
@@ -275,6 +408,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             101 ether
         );
         collateral.liquidateCollateral({
+            exchange: bebop,
             quoteCalldata: data,
             minUnderlyingOut: 101 ether,
             maxCollateralToLiquidate: 100 ether,
@@ -292,9 +426,47 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         );
         assertEq(
             collateral.sharesOf(address(this)),
-            100 ether,
-            "Shares should be the same"
+            0,
+            "Shares should be burned if collateral contract is fully liquidated"
         );
+    }
+
+    function test_liquidateCollateral_FullLiquidationIndexIncremented() external {
+        _deposit(50 ether);
+        uint32 beforeIndex = collateral.fullLiquidationIndex();
+        bytes memory data = _encodeExecute({
+            amountIn: 50 ether,
+            amountOut: 50 ether,
+            shouldRevert: false
+        });
+        _updateDelinquency(50 ether, true, true);
+
+        vm.prank(executor);
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: data,
+            minUnderlyingOut: 50 ether,
+            maxCollateralToLiquidate: 50 ether,
+            lengthWithdrawalQueue: 1
+        });
+
+        assertEq(
+            collateral.fullLiquidationIndex(),
+            beforeIndex + 1,
+            "fullLiquidationIndex should increment"
+        );
+        assertEq(collateral.totalShares(), 0, "totalShares reset");
+        assertEq(collateral.sharesOf(address(this)), 0, "shares reset");
+    }
+
+    function test_liquidateCollateral_NotApprovedExchange() external {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.NotApprovedExchange.selector
+            )
+        );
+        vm.prank(executor);
+        collateral.liquidateCollateral(address(1), "", 0, 0, 0);
     }
 
     function test_liquidateCollateral_LiquidationInCooldown() external {
@@ -313,12 +485,177 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
                 SimpleMarketCollateralMultiParty.LiquidationInCooldown.selector
             )
         );
-        collateral.liquidateCollateral("", 0, 0, 0);
+        collateral.liquidateCollateral(bebop, "", 0, 0, 0);
+    }
+
+    function test_liquidateCollateral_Underflow() external {
+        _deposit(100 ether);
+
+        // https://dashboard.tenderly.co/kethic/project/tx/0xae4bec560a9f0ccc23b26704e1dcc93471caecdc96279f241fa1bd0b7e23910d
+        uint256 totalAssetsBefore = 1_000_000_000_000_000_000;
+        MarketState memory traceState = MarketState({
+            isClosed: false,
+            maxTotalSupply: 2_000_000_000_000_000_000_000_000,
+            accruedProtocolFees: 3_890_577_957_511_165,
+            normalizedUnclaimedWithdrawals: 6_939_332_798_702_776_300,
+            scaledTotalSupply: 98_995_825_804_078_239_729,
+            scaledPendingWithdrawals: 48_997_892_878_178_946_646,
+            pendingWithdrawalExpiry: 0,
+            isDelinquent: true,
+            timeDelinquent: uint32(liquidationCooldown + 1),
+            protocolFeeBips: 500,
+            annualInterestBips: 500,
+            reserveRatioBips: 0,
+            scaleFactor: 1e27,
+            lastInterestAccruedTimestamp: uint32(block.timestamp)
+        });
+
+        market.setState(traceState);
+        market.setPendingAccruals({
+            normalizedUnclaimedDelta: 3_883_376_660_287_465,
+            accruedFeesDelta: 0
+        });
+        uint256 currentBalance = underlyingAsset.balanceOf(address(market));
+        if (currentBalance > 0) {
+            underlyingAsset.burn(address(market), currentBalance);
+        }
+        underlyingAsset.mint(address(market), totalAssetsBefore);
+
+        vm.expectRevert(stdError.arithmeticError);
+        market.repayAndProcessUnpaidWithdrawalBatches(0, 1);
+
+        bytes memory data =
+            _encodeExecute({amountIn: 6 ether, amountOut: 5_939_340_000_000_000_000, shouldRevert: false});
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.InsufficientSwapOutput.selector
+            )
+        );
+        vm.prank(executor);
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: data,
+            minUnderlyingOut: 5_939_340_000_000_000_000,
+            maxCollateralToLiquidate: 6 ether,
+            lengthWithdrawalQueue: 1
+        });
+    }
+
+    function test_liquidateCollateral_NonAtomicPath() external {
+        _deposit(100 ether);
+
+        uint256 totalAssetsBefore = 6_939_340_000_000_000_000;
+        MarketState memory traceState = MarketState({
+            isClosed: false,
+            maxTotalSupply: 2_000_000_000_000_000_000_000_000,
+            accruedProtocolFees: 3_890_577_957_511_165,
+            normalizedUnclaimedWithdrawals: 6_939_332_798_702_776_300,
+            scaledTotalSupply: 98_995_825_804_078_239_729,
+            scaledPendingWithdrawals: 48_997_892_878_178_946_646,
+            pendingWithdrawalExpiry: 0,
+            isDelinquent: true,
+            timeDelinquent: uint32(liquidationCooldown + 1),
+            protocolFeeBips: 500,
+            annualInterestBips: 500,
+            reserveRatioBips: 0,
+            scaleFactor: 1e27,
+            lastInterestAccruedTimestamp: uint32(block.timestamp)
+        });
+
+        market.setState(traceState);
+        market.setPendingAccruals(
+            3_883_376_660_287_465,
+            0
+        );
+
+        uint256 currentBalance = underlyingAsset.balanceOf(address(market));
+        if (currentBalance > 0) {
+            underlyingAsset.burn(address(market), currentBalance);
+        }
+        underlyingAsset.mint(address(market), totalAssetsBefore);
+
+        bytes memory data = _encodeExecute({
+            amountIn: 6 ether,
+            amountOut: 6_939_340_000_000_000_000,
+            shouldRevert: false
+        });
+
+        vm.prank(executor);
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: data,
+            minUnderlyingOut: 6_939_340_000_000_000_000,
+            maxCollateralToLiquidate: 6 ether,
+            lengthWithdrawalQueue: 1
+        });
+
+        assertEq(
+            underlyingAsset.balanceOf(address(market)),
+            totalAssetsBefore + 6_939_340_000_000_000_000,
+            "repayment not forwarded"
+        );
+    }
+
+    function test_liquidateCollateral_AtomicPath_NoUpdateState() external {
+        _deposit(10 ether);
+
+        MarketState memory state = MarketState({
+            isClosed: false,
+            maxTotalSupply: 2_000_000_000_000_000_000_000_000,
+            accruedProtocolFees: 0,
+            normalizedUnclaimedWithdrawals: 0,
+            scaledTotalSupply: 100 ether,
+            scaledPendingWithdrawals: 0,
+            pendingWithdrawalExpiry: 0,
+            isDelinquent: true,
+            timeDelinquent: uint32(liquidationCooldown + 1),
+            protocolFeeBips: 0,
+            annualInterestBips: 0,
+            reserveRatioBips: 10_000,
+            scaleFactor: 1e27,
+            lastInterestAccruedTimestamp: uint32(block.timestamp)
+        });
+
+        market.setState(state);
+        market.setPendingAccruals(1, 2);
+
+        uint256 currentBalance = underlyingAsset.balanceOf(address(market));
+        if (currentBalance > 0) {
+            underlyingAsset.burn(address(market), currentBalance);
+        }
+
+        bytes memory data = _encodeExecute({
+            amountIn: 2 ether,
+            amountOut: 3 ether,
+            shouldRevert: false
+        });
+
+        vm.prank(executor);
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: data,
+            minUnderlyingOut: 3 ether,
+            maxCollateralToLiquidate: 2 ether,
+            lengthWithdrawalQueue: 1
+        });
+
+        assertEq(
+            market.pendingNormalizedUnclaimed(),
+            1,
+            "updateState should not clear pending unclaimed"
+        );
+        assertEq(
+            market.pendingAccruedProtocolFees(),
+            2,
+            "updateState should not clear pending fees"
+        );
     }
 
     /// Test that deposits are not penalized for prior liquidations
     function test_depositAfterLiquidation() external {
         _deposit(100 ether);
+        console.log("Step 1");
         _fullLiquidation({
             delinquentAmount: 100 ether,
             collateralApproved: 100 ether,
@@ -326,6 +663,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             minUnderlyingOut: 50 ether,
             underlyingReceived: 51 ether
         });
+        console.log("Step 2");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             50 ether,
@@ -333,6 +671,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             "Reclaim amount should be 50 =/- 1 wei"
         );
         _deposit(50 ether);
+        console.log("Step 3");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             100 ether,
@@ -345,8 +684,10 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             collateralApproved: 10 ether,
             collateralSpent: 10 ether,
             minUnderlyingOut: 10 ether,
-            underlyingReceived: 10 ether
+            underlyingReceived: 10 ether,
+            skipChecks: true
         });
+        console.log("Step 4");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(this)),
             90 ether,
@@ -354,6 +695,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             "Reclaim amount should be 90 =/- 1 wei"
         );
         _deposit(address(2), 15 ether);
+        console.log("Step 5");
         assertApproxEqMinus(
             collateral.getReclaimableAmount(address(2)),
             15 ether,
@@ -365,17 +707,6 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             90 ether,
             1,
             "Reclaim amount should be 90 =/- 1 wei"
-        );
-        assertEq(
-            collateral.getLiquidatedCollateral(address(2)),
-            0,
-            "Liquidated collateral should be 0 for new depositor"
-        );
-        assertApproxEqPlus(
-            collateral.getLiquidatedCollateral(address(this)),
-            60 ether,
-            1,
-            "Liquidated collateral should be 60 =/+ 1 wei for old depositor"
         );
     }
 
@@ -402,6 +733,25 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         collateral.reclaimCollateral();
     }
 
+    function test_reclaimCollateral_SanctionedSender() external {
+        address depositor = address(0xBEEF);
+        _deposit(depositor, 100 ether);
+        market.setState(0, 0, false, 0, true);
+        sanctionsSentinel.setSanctioned(
+            collateral.marketBorrower(),
+            depositor,
+            true
+        );
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.SanctionedAccount.selector,
+                depositor
+            )
+        );
+        collateral.reclaimCollateral();
+    }
+
     function test_reclaimCollateral_ZeroReclaimAmount_AllCollateralLiquidated()
         external
     {
@@ -414,7 +764,7 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             underlyingReceived: 100 ether
         });
         market.setState(0, 0, false, 0, true);
-        _reclaim(address(this), 100 ether, 100 ether, 0);
+        _reclaim(address(this), 0, 100 ether, 0);
     }
 
     function test_reclaimCollateral_ZeroReclaimAmount_AlreadyReclaimed()
@@ -498,5 +848,206 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         vm.expectEmit(address(market));
         emit MockWildcatMarket.Repayment(0, 0);
         collateral.rescueTokens(address(underlyingAsset));
+    }
+
+    function test_violet() external {
+        address userA = address(0x0a);
+        address userB = address(0x0b);
+        address userC = address(0x0c);
+        _deposit(userA, 100 ether);
+        _fullLiquidation({
+            delinquentAmount: 100 ether,
+            collateralApproved: 100 ether,
+            collateralSpent: 100 ether,
+            minUnderlyingOut: 100 ether,
+            underlyingReceived: 100 ether
+        });
+        fastForward(100 days);
+        _deposit(userB, 50 ether);
+        _fullLiquidation({
+            delinquentAmount: 50 ether,
+            collateralApproved: 50 ether,
+            collateralSpent: 50 ether,
+            minUnderlyingOut: 50 ether,
+            underlyingReceived: 50 ether
+        });
+        _deposit(userC, 100 ether);
+        assertApproxEqAbs(
+            collateral.getReclaimableAmount(userA),
+            0,
+            1,
+            "userA should have 0 reclaimable amount"
+        );
+        assertApproxEqAbs(
+            collateral.getReclaimableAmount(userB),
+            0,
+            1,
+            "userB should have 0 reclaimable amount"
+        );
+        assertApproxEqAbs(
+            collateral.getReclaimableAmount(userC),
+            100 ether,
+            1,
+            "userC should have 100 reclaimable amount"
+        );
+        // // _deposit(userC, 100 ether);
+        // Depositor memory depositorA = collateral.getDepositor(userA);
+        // Depositor memory depositorB = collateral.getDepositor(userB);
+        // console.log(
+        //     "userA liquidation points:",
+        //     depositorA.liquidationPointsCorrection
+        // );
+        // console.log(
+        //     "userB liquidation points:",
+        //     depositorB.liquidationPointsCorrection
+        // );
+        // // console.log(
+        // //     "userC liquidation points:",
+        // //     collateral.liquidationPointsCorrections(userC)
+        // // );
+        // console.log(
+        //     "userA liquidated collateral:",
+        //     collateral.getLiquidatedCollateral(userA)
+        // );
+        // console.log(
+        //     "userB liquidated collateral:",
+        //     collateral.getLiquidatedCollateral(userB)
+        // );
+        // console.log(
+        //     "userC liquidated collateral:",
+        //     collateral.getLiquidatedCollateral(userC)
+        // );
+        // console.log(
+        //     "userA reclaimable amount:",
+        //     collateral.getReclaimableAmount(userA)
+        // );
+        // console.log(
+        //     "userB reclaimable amount:",
+        //     collateral.getReclaimableAmount(userB)
+        // );
+        // console.log(
+        //     "userC reclaimable amount:",
+        //     collateral.getReclaimableAmount(userC)
+        // );
+        // console.log("total shares:", collateral.totalShares());
+        // console.log("total liquidated:", collateral.totalLiquidated());
+        // console.log("available collateral:", collateral.availableCollateral());
+    }
+
+    function test_invariantResult() external {
+        _deposit(
+            0x760c0c4C0291fDd86F383Dc81A2E563c2090805A,
+            35023802776561736204669
+        );
+        _fullLiquidation({
+            delinquentAmount: 35023802776561736204669,
+            collateralApproved: 35023802776561736204669,
+            collateralSpent: 35023802776561736204669,
+            minUnderlyingOut: 35023802776561736204669,
+            underlyingReceived: 35023802776561736204669
+        });
+        _deposit(0x760c0c4C0291fDd86F383Dc81A2E563c2090805A, 1044352882);
+        uint shares = collateral.sharesOf(
+            0x760c0c4C0291fDd86F383Dc81A2E563c2090805A
+        );
+        uint shares2 = collateral
+            .getDepositor(0x760c0c4C0291fDd86F383Dc81A2E563c2090805A)
+            .shares;
+        assertEq(shares, shares2, "shares not updated");
+        uint totalShares = collateral.totalShares();
+        assertEq(totalShares, shares, "total shares not eq shares");
+    }
+
+    function _doLiquidate(
+        uint collateralToLiquidate
+    ) internal returns (uint256) {
+        // delinquentAmount = _hem(delinquentAmount, 1000, type(uint104).max - 100 ether);
+        uint availableCollateral = collateral.availableCollateral();
+        if (availableCollateral < 1000) {
+            return 0;
+        }
+        collateralToLiquidate = _hem(
+            collateralToLiquidate,
+            1000,
+            availableCollateral
+        );
+        console.log("available collateral:", availableCollateral);
+        console.log("liquidation amount:", collateralToLiquidate);
+
+        _fullLiquidation({
+            delinquentAmount: 1 ether,
+            collateralApproved: collateralToLiquidate,
+            collateralSpent: collateralToLiquidate,
+            minUnderlyingOut: 1 ether,
+            underlyingReceived: 1 ether
+        });
+        return collateralToLiquidate;
+    }
+
+    function test_violet2() external {
+        _deposit(10215);
+        uint collateralToLiquidate1 = _doLiquidate(324619612);
+        // Depositor memory depositor = collateral.getDepositor(address(this));
+        // console.log("shares remaining:", depositor.amountDeposited - depositor.amountLiquidated);
+
+        fastForward(100 days);
+        uint collateralToLiquidate2 = _doLiquidate(215013935);
+        // console.log("liquidated 1:", collateralToLiquidate1);
+        // console.log("liquidated 2:", collateralToLiquidate2);
+    }
+
+    /*
+    (4444 * type(uint128).max) / 10215
+    */
+
+    function _hem(
+        uint256 x,
+        uint256 min,
+        uint256 max
+    ) internal pure virtual returns (uint256 result) {
+        require(min <= max, "Max is less than min.");
+        /// @solidity memory-safe-assembly
+        assembly {
+            // prettier-ignore
+            for {} 1 {} {
+                // If `x` is between `min` and `max`, return `x` directly.
+                // This is to ensure that dictionary values
+                // do not get shifted if the min is nonzero.
+                // More info: https://github.com/foundry-rs/forge-std/issues/188
+                if iszero(or(lt(x, min), gt(x, max))) {
+                    result := x
+                    break
+                }
+                let size := add(sub(max, min), 1)
+                if lt(gt(x, 3), gt(size, x)) {
+                    result := add(min, x)
+                    break
+                }
+                if lt(lt(x, not(3)), gt(size, not(x))) {
+                    result := sub(max, not(x))
+                    break
+                }
+                // Otherwise, wrap x into the range [min, max],
+                // i.e. the range is inclusive.
+                if iszero(lt(x, max)) {
+                    let d := sub(x, max)
+                    let r := mod(d, size)
+                    if iszero(r) {
+                        result := max
+                        break
+                    }
+                    result := sub(add(min, r), 1)
+                    break
+                }
+                let d := sub(min, x)
+                let r := mod(d, size)
+                if iszero(r) {
+                    result := min
+                    break
+                }
+                result := add(sub(max, r), 1)
+                break
+            }
+        }
     }
 }

@@ -5,9 +5,28 @@ libs = ["lib"]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
+ffi=true
+
 remappings = [
   'forge-std/=lib/forge-std/src/',
   'openzeppelin/=lib/openzeppelin-contracts/',
   'solady/=lib/solady/src/',
   'v2-protocol/=lib/v2-protocol/src/',
 ]
+
+fs_permissions = [
+  { access = "read-write", path = "./deployments/"},
+  { access = "read-write", path = "./out/"},
+  { access = "read-write", path = "./ir-out/"},
+  { access = "read-write", path = "./deployments-old.json"}
+]
+
+[profile.ir]
+via_ir=true
+out='ir-out'
+cache_path='ir-cache'
+# optimizer_runs=4_294_967_295
+optimizer_runs=50_000
+optimizer=true
+extra_output_files=["irOptimized", "ir"]
+bytecode_hash = 'none'
