@@ -333,6 +333,25 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         });
     }
 
+    function test_liquidateCollateral_InsufficientCollateral() external {
+        _deposit(1 ether);
+        _updateDelinquency(1 ether, true, true);
+
+        vm.prank(executor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.InsufficientCollateral.selector
+            )
+        );
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: "",
+            minUnderlyingOut: 0,
+            maxCollateralToLiquidate: 2 ether,
+            lengthWithdrawalQueue: 0
+        });
+    }
+
     function test_liquidateCollateral() external {
         _deposit(100 ether);
         bytes memory data = _encodeExecute({
@@ -389,6 +408,34 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             0,
             "Shares should be burned if collateral contract is fully liquidated"
         );
+    }
+
+    function test_liquidateCollateral_FullLiquidationIndexIncremented() external {
+        _deposit(50 ether);
+        uint32 beforeIndex = collateral.fullLiquidationIndex();
+        bytes memory data = _encodeExecute({
+            amountIn: 50 ether,
+            amountOut: 50 ether,
+            shouldRevert: false
+        });
+        _updateDelinquency(50 ether, true, true);
+
+        vm.prank(executor);
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: data,
+            minUnderlyingOut: 50 ether,
+            maxCollateralToLiquidate: 50 ether,
+            lengthWithdrawalQueue: 1
+        });
+
+        assertEq(
+            collateral.fullLiquidationIndex(),
+            beforeIndex + 1,
+            "fullLiquidationIndex should increment"
+        );
+        assertEq(collateral.totalShares(), 0, "totalShares reset");
+        assertEq(collateral.sharesOf(address(this)), 0, "shares reset");
     }
 
     function test_liquidateCollateral_NotApprovedExchange() external {
@@ -526,6 +573,61 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
             underlyingAsset.balanceOf(address(market)),
             totalAssetsBefore + 6_939_340_000_000_000_000,
             "repayment not forwarded"
+        );
+    }
+
+    function test_liquidateCollateral_AtomicPath_NoUpdateState() external {
+        _deposit(10 ether);
+
+        MarketState memory state = MarketState({
+            isClosed: false,
+            maxTotalSupply: 2_000_000_000_000_000_000_000_000,
+            accruedProtocolFees: 0,
+            normalizedUnclaimedWithdrawals: 0,
+            scaledTotalSupply: 100 ether,
+            scaledPendingWithdrawals: 0,
+            pendingWithdrawalExpiry: 0,
+            isDelinquent: true,
+            timeDelinquent: uint32(liquidationCooldown + 1),
+            protocolFeeBips: 0,
+            annualInterestBips: 0,
+            reserveRatioBips: 10_000,
+            scaleFactor: 1e27,
+            lastInterestAccruedTimestamp: uint32(block.timestamp)
+        });
+
+        market.setState(state);
+        market.setPendingAccruals(1, 2);
+
+        uint256 currentBalance = underlyingAsset.balanceOf(address(market));
+        if (currentBalance > 0) {
+            underlyingAsset.burn(address(market), currentBalance);
+        }
+
+        bytes memory data = _encodeExecute({
+            amountIn: 2 ether,
+            amountOut: 3 ether,
+            shouldRevert: false
+        });
+
+        vm.prank(executor);
+        collateral.liquidateCollateral({
+            exchange: bebop,
+            quoteCalldata: data,
+            minUnderlyingOut: 3 ether,
+            maxCollateralToLiquidate: 2 ether,
+            lengthWithdrawalQueue: 1
+        });
+
+        assertEq(
+            market.pendingNormalizedUnclaimed(),
+            1,
+            "updateState should not clear pending unclaimed"
+        );
+        assertEq(
+            market.pendingAccruedProtocolFees(),
+            2,
+            "updateState should not clear pending fees"
         );
     }
 
