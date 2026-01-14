@@ -12,6 +12,7 @@ contract MockWildcatMarket {
 
     address public borrower;
     address public asset;
+    address public sentinel;
     uint256 public delinquencyGracePeriod;
 
     event Repayment(uint256 amount, uint256 batches);
@@ -19,10 +20,12 @@ contract MockWildcatMarket {
     constructor(
         address _borrower,
         address _asset,
+        address _sentinel,
         uint256 _delinquencyGracePeriod
     ) {
         borrower = _borrower;
         asset = _asset;
+        sentinel = _sentinel;
         delinquencyGracePeriod = _delinquencyGracePeriod;
         _state.scaleFactor = 1e27;
         _state.reserveRatioBips = 10_000;

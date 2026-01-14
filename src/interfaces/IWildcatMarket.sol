@@ -12,6 +12,8 @@ interface IWildcatMarket {
 
     function borrower() external view returns (address);
 
+    function sentinel() external view returns (address);
+
     function currentState() external view returns (MarketState memory);
 
     function updateState() external;

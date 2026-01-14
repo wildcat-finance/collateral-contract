@@ -170,6 +170,27 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         collateral.deposit(0);
     }
 
+    function test_deposit_SanctionedSender() external {
+        address depositor = address(0xBEEF);
+        uint256 amount = 100 ether;
+        collateralAsset.mint(depositor, amount);
+        vm.prank(depositor);
+        collateralAsset.approve(address(collateral), amount);
+        sanctionsSentinel.setSanctioned(
+            collateral.marketBorrower(),
+            depositor,
+            true
+        );
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.SanctionedAccount.selector,
+                depositor
+            )
+        );
+        collateral.deposit(amount);
+    }
+
     /* -------------------------------------------------------------------------- */
     /*                         getMarketDelinquencyStatus                         */
     /* -------------------------------------------------------------------------- */
@@ -707,6 +728,25 @@ contract SimpleMarketCollateralMultiPartyTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(
                 SimpleMarketCollateralMultiParty.ZeroShares.selector
+            )
+        );
+        collateral.reclaimCollateral();
+    }
+
+    function test_reclaimCollateral_SanctionedSender() external {
+        address depositor = address(0xBEEF);
+        _deposit(depositor, 100 ether);
+        market.setState(0, 0, false, 0, true);
+        sanctionsSentinel.setSanctioned(
+            collateral.marketBorrower(),
+            depositor,
+            true
+        );
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleMarketCollateralMultiParty.SanctionedAccount.selector,
+                depositor
             )
         );
         collateral.reclaimCollateral();

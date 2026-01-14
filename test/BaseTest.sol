@@ -13,6 +13,7 @@ import {fastForward} from "./utils/Time.sol";
 import {MockWildcatMarket} from "./mocks/MockWildcatMarket.sol";
 import {MockWildcatArchController} from "./mocks/MockWildcatArchController.sol";
 import {MockBebop} from "./mocks/MockBebop.sol";
+import {MockSanctionsSentinel} from "./mocks/MockSanctionsSentinel.sol";
 import "solady/utils/FixedPointMathLib.sol";
 
 using MathUtils for uint256;
@@ -30,6 +31,7 @@ struct CollateralExpectations {
 
 contract BaseTest is Test {
     MockWildcatArchController archController;
+    MockSanctionsSentinel sanctionsSentinel;
     WildcatMarketCollateralFactory factory;
     MockWildcatMarket market;
     MockERC20 underlyingAsset;
@@ -135,10 +137,12 @@ contract BaseTest is Test {
             initialExchanges,
             initialExecutors
         );
+        sanctionsSentinel = new MockSanctionsSentinel();
         underlyingAsset = new MockERC20("Token", "TKN", 18);
         market = new MockWildcatMarket(
             address(this),
             address(underlyingAsset),
+            address(sanctionsSentinel),
             1 days
         );
         archController.registerMarket(address(market));

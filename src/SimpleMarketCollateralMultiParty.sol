@@ -6,6 +6,7 @@ import "./libraries/FunctionTypeCasts.sol";
 import {WildcatMarketCollateralFactory} from "./WildcatMarketCollateralFactory.sol";
 import "v2-protocol/libraries/MarketState.sol";
 import "./interfaces/IWildcatMarket.sol";
+import "v2-protocol/interfaces/IWildcatSanctionsSentinel.sol";
 import "v2-protocol/ReentrancyGuard.sol";
 import "solady/utils/FixedPointMathLib.sol";
 
@@ -70,6 +71,9 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
 
     /// @dev The address of the borrower of the market.
     address public immutable marketBorrower;
+
+    /// @dev The sanctions sentinel used to check sanctioned accounts.
+    IWildcatSanctionsSentinel public immutable sanctionsSentinel;
 
     /// @dev The address of the underlying asset.
     address public immutable underlyingAsset;
@@ -142,6 +146,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     error DivFailed();
     error InsufficientCollateral();
     error NotApprovedExchange();
+    error SanctionedAccount(address account);
 
     /* ========================================================================== */
     /*                                  Modifiers                                 */
@@ -204,6 +209,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         collateralAsset = parameters.collateralToken;
         market = IWildcatMarket(parameters.associatedMarket);
         marketBorrower = parameters.borrower;
+        sanctionsSentinel = IWildcatSanctionsSentinel(market.sentinel());
 
         underlyingAsset = market.asset();
     }
@@ -328,6 +334,18 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
         }
     }
 
+    function _isSanctioned(address account) internal view returns (bool) {
+        return
+            account != address(0) &&
+            sanctionsSentinel.isSanctioned(marketBorrower, account);
+    }
+
+    function _checkNotSanctioned(address account) internal view {
+        if (_isSanctioned(account)) {
+            revert SanctionedAccount(account);
+        }
+    }
+
     /* ========================================================================== */
     /*                               Account Actions                              */
     /* ========================================================================== */
@@ -335,6 +353,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     function deposit(
         uint256 _amount
     ) public marketOpen nonReentrant returns (bool) {
+        _checkNotSanctioned(msg.sender);
         if (_amount == 0) revert ZeroDepositAmount();
 
         uint256 depositAmount = _amount.toUint248();
@@ -371,6 +390,7 @@ contract SimpleMarketCollateralMultiParty is ReentrancyGuard {
     }
 
     function reclaimCollateral() public marketClosed nonReentrant {
+        _checkNotSanctioned(msg.sender);
         Depositor storage depositor = _getDepositor(msg.sender);
 
         uint224 shares = depositor.shares;
