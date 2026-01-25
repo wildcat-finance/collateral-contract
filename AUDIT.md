@@ -1,4 +1,4 @@
-# Security Review Prep
+# Collateral-Contracts Security Review Prep
 
 ## Basic Info
 
@@ -10,13 +10,13 @@
 
 ## Code Details
 
-| Link to Repo to be audited                              |     |
+| https://github.com/wildcat-finance/collateral-contract  |     |
 | ------------------------------------------------------- | --- |
-| Commit hash                                             | TBD |
+| Commit hash                                             | 2341f068fa11ac0c0532f107cbac9199718b3836 |
 | Number of Contracts in Scope                            | 6   |
 | Total SLOC for contracts in scope                       | 816 |
 | Complexity Score                                        | 573 |
-| How many external protocols does the code interact with | TBD |
+| How many external protocols does the code interact with | approved exchanges |
 | Overall test coverage for code under audit              | 90% |
 
 ### In Scope Contracts
@@ -35,14 +35,12 @@
 
 ## Protocol Details
 
-Tell us a little bit about your protocol.
-
 | Current Status                                                      |     |
 | ------------------------------------------------------------------- | --- |
 | Is the project a fork of the existing protocol                      | No  |
 | Does the project use rollups?                                       | Yes |
 | Will the protocol be multi-chain?                                   | Yes |
-| Specify chain(s) on which protocol is/ would be deployed            | TBD |
+| Specify chain(s) on which protocol is / would be deployed           | Ethereum, Plasma, tbd |
 | Does the protocol use external oracles?                             | Yes (sanctions oracle only, not price) |
 | Does the protocol use external AMMs?                                | Yes |
 | Does the protocol use zero-knowledge proofs?                        | No  |
@@ -53,10 +51,9 @@ Tell us a little bit about your protocol.
 
 ## Protocol Risks
 
-Tell us what you consider acceptable risks. We will ignore evaluating some risks based on this feedback.
-
-| Should we evaluate risks related to centralization?                          |     |
+| | | 
 | ---------------------------------------------------------------------------- | --- |
+| Should we evaluate risks related to centralization?                          | No  |
 | Should we evaluate the risks of rogue protocol admin capturing user funds?   | No  |
 | Should we evaluate risks related to deflationary/ inflationary ERC20 tokens? | No (out of scope; disallowed collateral) |
 | Should we evaluate risks due to fee-on-transfer tokens?                      | No (out of scope; disallowed collateral) |
