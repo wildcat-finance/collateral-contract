@@ -48,33 +48,37 @@ contract ProRataCollateralDistributorTest is Test {
         uint256 reviewEndsAt = block.timestamp + reviewDelay;
 
         vm.expectRevert(IProRataCollateralDistributor.CallerNotSnapshotAuthority.selector);
-        distributor.proposeSnapshot(market, block.number, 1 ether, root, evidence, reviewEndsAt);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 10 ether, root, evidence, reviewEndsAt);
 
         vm.startPrank(authority);
         vm.expectRevert(IProRataCollateralDistributor.InvalidMarket.selector);
-        distributor.proposeSnapshot(address(0xBEEF), block.number, 1 ether, root, evidence, reviewEndsAt);
+        distributor.proposeSnapshot(address(0xBEEF), block.number, 1 ether, 10 ether, root, evidence, reviewEndsAt);
 
         vm.expectRevert(IProRataCollateralDistributor.InvalidSnapshotBlock.selector);
-        distributor.proposeSnapshot(market, 0, 1 ether, root, evidence, reviewEndsAt);
+        distributor.proposeSnapshot(market, 0, 1 ether, 10 ether, root, evidence, reviewEndsAt);
 
         vm.expectRevert(IProRataCollateralDistributor.InvalidTotalScaledDebt.selector);
-        distributor.proposeSnapshot(market, block.number, 0, root, evidence, reviewEndsAt);
+        distributor.proposeSnapshot(market, block.number, 0, 10 ether, root, evidence, reviewEndsAt);
+
+        vm.expectRevert(IProRataCollateralDistributor.InvalidCollateralAmount.selector);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 0, root, evidence, reviewEndsAt);
 
         vm.expectRevert(IProRataCollateralDistributor.InvalidMerkleRoot.selector);
-        distributor.proposeSnapshot(market, block.number, 1 ether, bytes32(0), evidence, reviewEndsAt);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 10 ether, bytes32(0), evidence, reviewEndsAt);
 
         vm.expectRevert(IProRataCollateralDistributor.InvalidEvidenceHash.selector);
-        distributor.proposeSnapshot(market, block.number, 1 ether, root, bytes32(0), reviewEndsAt);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 10 ether, root, bytes32(0), reviewEndsAt);
 
         vm.expectRevert(IProRataCollateralDistributor.InvalidReviewEnd.selector);
-        distributor.proposeSnapshot(market, block.number, 1 ether, root, evidence, reviewEndsAt - 1);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 10 ether, root, evidence, reviewEndsAt - 1);
 
-        distributor.proposeSnapshot(market, block.number, 1 ether, root, evidence, reviewEndsAt);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 10 ether, root, evidence, reviewEndsAt);
 
         (
             address storedMarket,
             uint256 storedSnapshotBlock,
             uint256 storedTotalScaledDebt,
+            uint256 storedCollateralAmount,
             bytes32 storedRoot,
             bytes32 storedEvidence,
             uint256 storedReviewEndsAt
@@ -83,22 +87,23 @@ contract ProRataCollateralDistributorTest is Test {
         assertEq(storedMarket, market);
         assertEq(storedSnapshotBlock, block.number);
         assertEq(storedTotalScaledDebt, 1 ether);
+        assertEq(storedCollateralAmount, 10 ether);
         assertEq(storedRoot, root);
         assertEq(storedEvidence, evidence);
         assertEq(storedReviewEndsAt, reviewEndsAt);
 
         vm.expectRevert(IProRataCollateralDistributor.SnapshotProposalActive.selector);
-        distributor.proposeSnapshot(market, block.number, 1 ether, root, evidence, reviewEndsAt);
+        distributor.proposeSnapshot(market, block.number, 1 ether, 10 ether, root, evidence, reviewEndsAt);
         vm.stopPrank();
     }
 
     function testCancelProposal() public {
-        _propose(_leaf(alice, 1 ether), 1 ether);
+        _propose(_leaf(alice, 1 ether), 1 ether, 1 ether);
 
         vm.prank(authority);
         distributor.cancelSnapshot();
 
-        (,,, bytes32 storedRoot,,) = distributor.pendingSnapshot();
+        (,,,, bytes32 storedRoot,,) = distributor.pendingSnapshot();
         assertEq(storedRoot, bytes32(0));
 
         vm.prank(authority);
@@ -108,13 +113,18 @@ contract ProRataCollateralDistributorTest is Test {
 
     function testFinalizeRequiresDelayAndCapturesCollateral() public {
         bytes32 root = _leaf(alice, 1 ether);
-        _propose(root, 1 ether);
+        _propose(root, 1 ether, 10 ether);
         collateralAsset.mint(address(distributor), 10 ether);
 
+        vm.prank(authority);
         vm.expectRevert(IProRataCollateralDistributor.ReviewPeriodActive.selector);
         distributor.finalizeSnapshot();
 
         vm.warp(block.timestamp + reviewDelay);
+        vm.expectRevert(IProRataCollateralDistributor.CallerNotSnapshotAuthority.selector);
+        distributor.finalizeSnapshot();
+
+        vm.prank(authority);
         distributor.finalizeSnapshot();
 
         assertTrue(distributor.finalized());
@@ -122,16 +132,35 @@ contract ProRataCollateralDistributorTest is Test {
         assertEq(distributor.totalScaledDebt(), 1 ether);
         assertEq(distributor.totalCollateral(), 10 ether);
 
+        vm.prank(authority);
         vm.expectRevert(IProRataCollateralDistributor.SnapshotAlreadyFinalized.selector);
         distributor.finalizeSnapshot();
+    }
+
+    function testFinalizeRequiresExpectedCollateralBalance() public {
+        _propose(_leaf(alice, 1 ether), 1 ether, 10 ether);
+        collateralAsset.mint(address(distributor), 9 ether);
+        vm.warp(block.timestamp + reviewDelay);
+
+        vm.prank(authority);
+        vm.expectRevert(IProRataCollateralDistributor.InsufficientCollateral.selector);
+        distributor.finalizeSnapshot();
+
+        collateralAsset.mint(address(distributor), 1 ether);
+
+        vm.prank(authority);
+        distributor.finalizeSnapshot();
+
+        assertEq(distributor.totalCollateral(), 10 ether);
     }
 
     function testRejectsBadProof() public {
         bytes32 aliceLeaf = _leaf(alice, 1 ether);
         bytes32 bobLeaf = _leaf(bob, 1 ether);
-        _propose(_root2(aliceLeaf, bobLeaf), 2 ether);
+        _propose(_root2(aliceLeaf, bobLeaf), 2 ether, 100 ether);
         collateralAsset.mint(address(distributor), 100 ether);
         vm.warp(block.timestamp + reviewDelay);
+        vm.prank(authority);
         distributor.finalizeSnapshot();
 
         bytes32[] memory badProof = new bytes32[](1);
@@ -145,9 +174,10 @@ contract ProRataCollateralDistributorTest is Test {
     function testClaimsProRataAndRejectsDoubleClaim() public {
         bytes32 aliceLeaf = _leaf(alice, 1 ether);
         bytes32 bobLeaf = _leaf(bob, 3 ether);
-        _propose(_root2(aliceLeaf, bobLeaf), 4 ether);
+        _propose(_root2(aliceLeaf, bobLeaf), 4 ether, 1000 ether);
         collateralAsset.mint(address(distributor), 1000 ether);
         vm.warp(block.timestamp + reviewDelay);
+        vm.prank(authority);
         distributor.finalizeSnapshot();
 
         bytes32[] memory aliceProof = new bytes32[](1);
@@ -178,9 +208,10 @@ contract ProRataCollateralDistributorTest is Test {
         bytes32 carolLeaf = _leaf(carol, 1);
         bytes32 pair = _hashPair(aliceLeaf, bobLeaf);
 
-        _propose(_hashPair(pair, carolLeaf), 3);
+        _propose(_hashPair(pair, carolLeaf), 3, 100);
         collateralAsset.mint(address(distributor), 100);
         vm.warp(block.timestamp + reviewDelay);
+        vm.prank(authority);
         distributor.finalizeSnapshot();
 
         bytes32[] memory aliceProof = new bytes32[](2);
@@ -214,7 +245,7 @@ contract ProRataCollateralDistributorTest is Test {
 
     function testClaimRequiresFinalizedSnapshotAndRecipient() public {
         bytes32 leaf = _leaf(alice, 1 ether);
-        _propose(leaf, 1 ether);
+        _propose(leaf, 1 ether, 1 ether);
 
         bytes32[] memory proof = new bytes32[](0);
         vm.prank(alice);
@@ -223,6 +254,7 @@ contract ProRataCollateralDistributorTest is Test {
 
         collateralAsset.mint(address(distributor), 1 ether);
         vm.warp(block.timestamp + reviewDelay);
+        vm.prank(authority);
         distributor.finalizeSnapshot();
 
         vm.prank(alice);
@@ -230,10 +262,16 @@ contract ProRataCollateralDistributorTest is Test {
         distributor.claim(1 ether, proof, address(0));
     }
 
-    function _propose(bytes32 root, uint256 totalScaledDebt) internal {
+    function _propose(bytes32 root, uint256 totalScaledDebt, uint256 collateralAmount) internal {
         vm.prank(authority);
         distributor.proposeSnapshot(
-            market, block.number, totalScaledDebt, root, keccak256("evidence"), block.timestamp + reviewDelay
+            market,
+            block.number,
+            totalScaledDebt,
+            collateralAmount,
+            root,
+            keccak256("evidence"),
+            block.timestamp + reviewDelay
         );
     }
 
