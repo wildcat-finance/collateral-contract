@@ -10,7 +10,7 @@ remaining BTC collateral can be released to debt holders pro rata instead of for
 The hard part is not the division formula. The hard part is recording who owned what share of the
 Wildcat debt at the settlement point without changing the market token into a bespoke ERC-20.
 
-For this run, “working prototype” means:
+For this PR, “working prototype” means:
 
 1. a small contract can accept an authenticated snapshot of debt-holder proportions for a market;
 2. the snapshot authority can finalise the snapshot after a review delay;
@@ -141,14 +141,16 @@ Trade: strongest direct source if done perfectly, but the wrong prototype. It ex
 surface, changes ERC-20 expectations, and forces all markets to pay for a feature only some
 collateral products need.
 
-## Picked design
+## Implemented design
 
-Pick Option A first: an attested Merkle snapshot distributor.
+PR #6 implements Option A: an attested Merkle snapshot distributor. It also adds
+`DebtSnapshotEventRecorder`, an event-only stub for the hook or adapter that would feed a
+reconciler.
 
-It is the cheapest construction that proves whether the product idea is useful. It keeps Wildcat
-market tokens standard, avoids AMM sale pressure, and makes the offline reconciliation lag explicit:
-settlement can wait a few hours while an indexer and ratifiers produce the root. If the prototype is
-useful, Option B can be added later as a stronger source for markets launched with a tracker hook.
+This keeps Wildcat market tokens standard, avoids AMM sale pressure, and makes the offline
+reconciliation lag explicit: settlement can wait while an indexer and ratifiers produce the root. If
+the prototype is worth continuing, Option B can be added later as a stronger source for markets
+launched with a tracker hook.
 
 The study reading of the user's idea is:
 

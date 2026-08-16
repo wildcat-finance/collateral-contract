@@ -1,8 +1,9 @@
 # Pro-rata collateral release snapshots
 
-This note sketches a prototype for physical-style collateral release after a Wildcat market default
-or settlement trigger. Instead of forcing collateral through an AMM, a distributor releases the
-collateral asset itself to debt holders by their agreed share of the debt at a snapshot point.
+This note describes the prototype in PR #6 for physical-style collateral release after a Wildcat
+market default or settlement trigger. Instead of forcing collateral through an AMM, a distributor
+releases the collateral asset itself to debt holders by their agreed share of the debt at a snapshot
+point.
 
 The prototype is intentionally narrow:
 
@@ -11,8 +12,8 @@ The prototype is intentionally narrow:
 - it does not build a liquidation router; and
 - it treats the reconciled snapshot as an authenticated input with a delay, not as magic.
 
-The full study is in [pro-rata-collateral-study.md](fiat/pro-rata-collateral-study.md). The delivery
-runbook is in [pro-rata-collateral-runbook.md](fiat/pro-rata-collateral-runbook.md).
+The full study is in [pro-rata-collateral-study.md](fiat/pro-rata-collateral-study.md). The
+implementation runbook is in [pro-rata-collateral-runbook.md](fiat/pro-rata-collateral-runbook.md).
 
 ## Why this exists
 
@@ -44,10 +45,10 @@ inception, or a proof system.
 
 ## Event recorder prototype
 
-`DebtSnapshotEventRecorder` is the smallest useful observability surface. A designated recorder,
-standing in for a market hook or adapter, emits scaled debt movements for deposits, transfers and
-queued withdrawals. It does not store balances and it does not decide the settlement root. It gives a
-reconciler a clean event trail to check before proposing a root to the distributor.
+`DebtSnapshotEventRecorder` is the smallest observability surface in this prototype. A designated
+recorder, standing in for a market hook or adapter, emits scaled debt movements for deposits,
+transfers and queued withdrawals. It does not store balances and it does not decide the settlement
+root. It gives a reconciler an event trail to check before proposing a root to the distributor.
 
 The lag is deliberate. The path is: emit movement events, reconcile offchain, propose the root, wait
 through the review delay, finalise the funded snapshot, then let holders claim. If the product needs
@@ -79,5 +80,5 @@ data trail without changing ERC-20 behaviour.
 - underfunded finalisation; and
 - collateral rescue after commitment.
 
-The design is promising only if those risks stay explicit. If the product copy starts saying “the
-contract knows all historical holders”, it has gone off the rails.
+The design is usable only while those risks stay explicit. If the product copy starts saying “the
+contract knows all historical holders”, it is wrong.

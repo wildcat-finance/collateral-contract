@@ -1,4 +1,7 @@
-# Runbook: pro-rata collateral release snapshots
+# Runbook followed for pro-rata collateral release snapshots
+
+This is the delivery runbook used for PR #6. It is kept in the repo so reviewers can see how the
+prototype was split, tested and audited.
 
 ## Step 1: Commit the spec and user-facing framing
 
@@ -26,7 +29,7 @@ new docs.
 **Goal.** Add a minimal `ProRataCollateralDistributor` that can finalise an authenticated debt
 snapshot and distribute collateral by Merkle-proven scaled-debt proportions.
 
-**Entry.** Step 1 branch after its PR commit.
+**Entry.** Step 1 branch after its PR commit. The stack was later collapsed into PR #6.
 
 **Exit.** The distributor supports one collateral asset and one market per instance; a snapshot
 authority can propose a root with `market`, `snapshotBlock`, `totalScaledDebt`,
@@ -50,7 +53,7 @@ rejection. Run `forge test --summary`.
 
 **Goal.** Show how a reconciler gets the data it needs without changing the Wildcat market token.
 
-**Entry.** Step 2 branch after its PR commit.
+**Entry.** Step 2 branch after its PR commit. The stack was later collapsed into PR #6.
 
 **Exit.** Add a small recorder/mock hook surface that emits scaled debt movements for deposits,
 transfers and queued withdrawals, plus an end-to-end test that reconstructs a simple snapshot from
