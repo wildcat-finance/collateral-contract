@@ -31,9 +31,11 @@ or an explicit decision to use another unit.
 The first prototype is an attested Merkle snapshot distributor.
 
 1. A reconciler reconstructs debt-holder proportions for a market and snapshot point.
-2. A snapshot authority proposes a Merkle root, total scaled debt and evidence hash.
+2. A snapshot authority proposes a Merkle root, total scaled debt, collateral amount and evidence
+   hash.
 3. The proposal waits through a review delay.
-4. The root is finalised.
+4. The snapshot authority finalises the root once the distributor holds the committed collateral
+   amount.
 5. Each account claims collateral once with a Merkle proof.
 
 This is not trustless. The point of v0 is to make the trust boundary small and visible. A later
@@ -62,7 +64,8 @@ data trail without changing ERC-20 behaviour.
 - scaled debt versus normalised debt;
 - double claims;
 - rounding dust;
-- admin cancellation and finalisation timing; and
+- admin cancellation and finalisation timing;
+- underfunded finalisation; and
 - collateral rescue after commitment.
 
 The design is promising only if those risks stay explicit. If the product copy starts saying “the

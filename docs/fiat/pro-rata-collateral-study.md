@@ -13,7 +13,7 @@ Wildcat debt at the settlement point without changing the market token into a be
 For this run, “working prototype” means:
 
 1. a small contract can accept an authenticated snapshot of debt-holder proportions for a market;
-2. the snapshot can be finalised after a review delay;
+2. the snapshot authority can finalise the snapshot after a review delay;
 3. collateral held by the distributor can be claimed once per account using those proportions; and
 4. tests show that the full collateral pool is allocated by the committed proportions, with dust
    handled deterministically.
@@ -99,12 +99,14 @@ A `ProRataCollateralDistributor` holds collateral for one market. A snapshot aut
 - collateral asset;
 - snapshot block or settlement timestamp;
 - total scaled debt in the snapshot;
+- committed collateral amount;
 - Merkle root of `(account, scaledDebt)` leaves; and
 - evidence hash for the reconciliation bundle.
 
-After a review delay, the root can be finalised. Each account claims collateral with a Merkle proof.
-The claim amount is `floor(totalCollateral * scaledDebt / totalScaledDebt)`, with the last claim or
-an explicit dust recipient handling remainder.
+After a review delay, the snapshot authority can finalise the root once the distributor holds the
+committed collateral amount. Each account claims collateral with a Merkle proof. The claim amount is
+`floor(totalCollateral * scaledDebt / totalScaledDebt)`, with the last claim or an explicit dust
+recipient handling remainder.
 
 Trade: simplest useful prototype, no ERC-20 changes, works with existing markets if the authority
 can reconstruct holders. The cost is trust in the authority or ratifier set. A challenge path can

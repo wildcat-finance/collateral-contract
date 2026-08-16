@@ -29,9 +29,10 @@ snapshot and distribute collateral by Merkle-proven scaled-debt proportions.
 **Entry.** Step 1 branch after its PR commit.
 
 **Exit.** The distributor supports one collateral asset and one market per instance; a snapshot
-authority can propose a root with `market`, `snapshotBlock`, `totalScaledDebt`, `merkleRoot`,
-`evidenceHash` and `reviewEndsAt`; the authority can cancel before finalisation; anyone can finalise
-after the review delay; each account can claim once with a Merkle proof. Claimed amounts are
+authority can propose a root with `market`, `snapshotBlock`, `totalScaledDebt`,
+`collateralAmount`, `merkleRoot`, `evidenceHash` and `reviewEndsAt`; the authority can cancel before
+finalisation; the authority can finalise after the review delay once the distributor holds the
+committed collateral amount; each account can claim once with a Merkle proof. Claimed amounts are
 calculated as `floor(totalCollateral * scaledDebt / totalScaledDebt)`, and a deterministic dust path
 prevents permanent accounting ambiguity.
 
