@@ -1,98 +1,86 @@
-# Wildcat Market Collateral Contracts
+# Wildcat market collateral contracts
 
-Smart contracts for managing credit line collateral within the Wildcat protocol. This implementation provides a mechanism for borrowers to deposit collateral that can be liquidated in case of delinquency.
+Smart contracts for holding collateral against Wildcat credit markets and liquidating it when a
+market enters penalised delinquency.
 
-## Overview
+## What is here
 
-This repository contains Solidity smart contracts for collateral management in Wildcat markets:
+- `WildcatMarketCollateralFactory` deploys collateral contracts with deterministic addresses.
+- `SimpleMarketCollateral` supports borrower-owned collateral for one market.
+- `SimpleMarketCollateralMultiParty` supports collateral deposits from many accounts and tracks each
+  depositor's share of later liquidations.
+- `ProRataCollateralDistributor` releases one collateral asset to debt holders from an attested
+  Merkle snapshot.
+- `DebtSnapshotEventRecorder` emits scaled-debt movement events for a reconciler to read; it does
+  not settle claims or store balances.
+- `docs/pro-rata-collateral-snapshots.md` sketches the pro-rata collateral release prototype being
+  explored in issue [#5](https://github.com/wildcat-finance/collateral-contract/issues/5).
 
-- `WildcatMarketCollateral`: Core contract for collateral management
-- `WildcatMarketCollateralFactory`: Factory contract for deploying collateral contracts
-- `SimpleMarketCollateral`: Simplified collateral implementation
-- `SimpleMarketCollateralMultiParty`: Multi-party collateral implementation
+## Multi-party collateral
 
-## SimpleMarketCollateralMultiParty
+`SimpleMarketCollateralMultiParty` lets many users deposit one collateral asset for a Wildcat market.
+Approved liquidators can sell collateral through Bebop PMM when the market is in penalised
+delinquency, then send the received underlying asset to the market as repayment.
 
-The `SimpleMarketCollateralMultiParty` contract is the core collateral management system designed for Wildcat markets with these key features:
+The contract tracks deposits with shares and tracks liquidation debits with a points-style accounting
+system. A depositor who enters after a liquidation is not charged for that earlier liquidation. When
+the market is closed, each depositor can reclaim its remaining collateral.
 
-### Purpose and Design
-A collateral contract that supports multiple depositors providing collateral assets that can be liquidated when the underlying Wildcat market enters a penalized delinquency state. The contract integrates with Bebop PMM (Private Market Maker) for efficient liquidation processing.
+The current implementation does not support rebasing tokens or assets with non-standard transfer
+semantics because it uses internal accounting rather than treating `balanceOf(address(this))` as the
+source of truth. Tokens sent by mistake can be rescued by the borrower when the rescue does not
+touch committed collateral.
 
-### Key Functionality
+## Pro-rata collateral snapshots
 
-- **Multi-Party Deposit System**: Allows multiple users to deposit collateral assets while maintaining individual accounting.
-- **Share-Based Accounting**: Users receive shares equivalent to their deposit amounts, with internal accounting to track liquidations.
-- **Liquidation Management**: Liquidations are processed through Bebop PMM by approved liquidators when markets enter penalized delinquency.
-- **Liquidation Points**: Utilizes a dividend-like system (but for debits) to track the amount of collateral liquidated from each user's deposit.
-- **Fair Distribution**: New depositors are not penalized for liquidations that occurred before their deposits.
-- **Reclaim Mechanism**: Users can withdraw their remaining collateral once the underlying market is terminated.
-- **Token Rescue**: Borrowers can rescue tokens mistakenly sent to the contract.
+`ProRataCollateralDistributor` is a research prototype for physical-style settlement. A snapshot
+authority proposes a Merkle root for one market, one collateral amount and one set of scaled debt
+holders. After a review delay, the authority can finalise only when the distributor holds the
+committed collateral amount. Holders then claim with Merkle proofs.
 
-### Deployment through WildcatMarketCollateralFactory
+`DebtSnapshotEventRecorder` is the matching observability stub. A configured recorder address emits
+deposit, transfer and queued-withdrawal movements in scaled debt units. The recorder is evidence for
+an offchain reconciliation process, not the source of settlement truth.
 
-The `WildcatMarketCollateralFactory` is responsible for deploying `SimpleMarketCollateralMultiParty` contracts using these key mechanisms:
+## Factory
 
-- **Deterministic Deployment**: Uses Create2 for deterministic address generation, ensuring contracts can be located predictably.
-- **Collateral Parameters**: Temporarily stores parameters (collateral token, associated market, borrower) in transient storage during deployment.
-- **Deployment Process**:
-  1. Market participants call `deployCollateralContract(collateralToken, associatedMarket)`
-  2. Factory creates a unique salt based on the collateral token and associated market
-  3. Factory verifies no duplicate contract exists for the same parameters
-  4. Factory retrieves the borrower from the associated market
-  5. Parameters are temporarily stored for the contract constructor to access
-  6. Contract is deployed using LibStoredInitCode for efficient deployment
-  7. Deployed contract is registered in the factory's tracking system
+`WildcatMarketCollateralFactory` deploys collateral contracts with CREATE2. The deployment salt is
+based on the collateral token and the associated market, so a market can have one collateral contract
+per collateral asset. During deployment, the factory stores the borrower, collateral token and market
+in transient storage for the collateral contract constructor.
 
-- **Contract Registry**: Maintains a mapping of deployed collateral contracts by market, allowing query functions like `listCollateralMarkets(market, asset)`
-- **Liquidator Management**: Provides functions to approve and remove liquidators who can execute collateral liquidations
+The factory also lets the Wildcat arch-controller owner approve and remove liquidators.
 
-### Security Considerations
+## Known risks
 
-- The liquidation process carries an inherent risk where a malicious executor collaborating with a malicious maker on Bebop could potentially process liquidations at unfavorable prices.
-- The contract does not support rebasing tokens or assets with non-standard transfer semantics due to its internal balance tracking approach.
-- Liquidations are restricted by cooldown periods and maximum repayment limits to prevent abuse.
-
-### Key Functions
-
-- `deposit(uint256 _amount)`: Allows users to deposit collateral
-- `liquidateCollateral(bytes, uint, uint, uint)`: Sells collateral to repay delinquent debt via Bebop PMM
-- `reclaimCollateral()`: Allows users to reclaim their remaining collateral after market termination
-- `getLiquidatedCollateral(address)`: Returns the total collateral that has been liquidated from an account
-- `getReclaimableAmount(address)`: Returns the amount of collateral that can be reclaimed by an account
+- Liquidation depends on calldata supplied to Bebop PMM by an approved executor. A malicious executor
+  and maker could sell collateral at a poor price.
+- Cooldowns and maximum repayment checks limit liquidation cadence and over-repayment, but they do
+  not make the swap price fair.
+- Multi-party accounting rounds liquidation points up so the contract does not become insolvent. A
+  depositor can be debited a few wei more than its exact proportional share.
+- The pro-rata snapshot prototype trusts the configured snapshot authority and reconciler. A bad
+  root can still encode a bad settlement.
+- The repo contains a commented historical `WildcatMarketCollateral.sol`; current tests target
+  `SimpleMarketCollateralMultiParty`, `ProRataCollateralDistributor` and
+  `DebtSnapshotEventRecorder`.
 
 ## Development
 
-This project uses [Foundry](https://book.getfoundry.sh/) for Ethereum development.
-
-### Setup
+This project uses Foundry.
 
 ```shell
-# Clone the repository with submodules
 git clone --recursive https://github.com/wildcat-finance/collateral-contract.git
 cd collateral-contract
-
-# Install dependencies
-forge install
-```
-
-### Build
-
-```shell
-forge build
-```
-
-### Test
-
-```shell
 forge test
 ```
 
-### Code Coverage
+Coverage:
 
 ```shell
 yarn coverage
 ```
 
-## License
+## Licence
 
 Apache-2.0 WITH LicenseRef-Commons-Clause-1.0
