@@ -66,6 +66,7 @@ contract ProRataCollateralDistributor is IProRataCollateralDistributor, Reentran
         address market_,
         uint256 snapshotBlock_,
         uint256 totalScaledDebt_,
+        uint256 collateralAmount_,
         bytes32 merkleRoot_,
         bytes32 evidenceHash_,
         uint256 reviewEndsAt_
@@ -77,6 +78,7 @@ contract ProRataCollateralDistributor is IProRataCollateralDistributor, Reentran
         if (market_ != market) revert InvalidMarket();
         if (snapshotBlock_ == 0) revert InvalidSnapshotBlock();
         if (totalScaledDebt_ == 0) revert InvalidTotalScaledDebt();
+        if (collateralAmount_ == 0) revert InvalidCollateralAmount();
         if (merkleRoot_ == bytes32(0)) revert InvalidMerkleRoot();
         if (evidenceHash_ == bytes32(0)) revert InvalidEvidenceHash();
         if (reviewEndsAt_ < block.timestamp + reviewDelay) {
@@ -87,12 +89,15 @@ contract ProRataCollateralDistributor is IProRataCollateralDistributor, Reentran
             market: market_,
             snapshotBlock: snapshotBlock_,
             totalScaledDebt: totalScaledDebt_,
+            collateralAmount: collateralAmount_,
             merkleRoot: merkleRoot_,
             evidenceHash: evidenceHash_,
             reviewEndsAt: reviewEndsAt_
         });
 
-        emit SnapshotProposed(market_, snapshotBlock_, totalScaledDebt_, merkleRoot_, evidenceHash_, reviewEndsAt_);
+        emit SnapshotProposed(
+            market_, snapshotBlock_, totalScaledDebt_, collateralAmount_, merkleRoot_, evidenceHash_, reviewEndsAt_
+        );
     }
 
     function cancelSnapshot() external onlySnapshotAuthority {
@@ -104,7 +109,7 @@ contract ProRataCollateralDistributor is IProRataCollateralDistributor, Reentran
         emit SnapshotCancelled(proposal.evidenceHash);
     }
 
-    function finalizeSnapshot() external {
+    function finalizeSnapshot() external onlySnapshotAuthority {
         if (finalized) revert SnapshotAlreadyFinalized();
 
         SnapshotProposal memory proposal = pendingSnapshot;
@@ -113,12 +118,17 @@ contract ProRataCollateralDistributor is IProRataCollateralDistributor, Reentran
             revert ReviewPeriodActive();
         }
 
+        uint256 balance = collateralAsset.balanceOf(address(this));
+        if (balance < proposal.collateralAmount) {
+            revert InsufficientCollateral();
+        }
+
         finalized = true;
         snapshotBlock = proposal.snapshotBlock;
         totalScaledDebt = proposal.totalScaledDebt;
         merkleRoot = proposal.merkleRoot;
         evidenceHash = proposal.evidenceHash;
-        totalCollateral = collateralAsset.balanceOf(address(this));
+        totalCollateral = proposal.collateralAmount;
 
         delete pendingSnapshot;
 

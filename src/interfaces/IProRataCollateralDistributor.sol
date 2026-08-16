@@ -6,6 +6,7 @@ interface IProRataCollateralDistributor {
         address market;
         uint256 snapshotBlock;
         uint256 totalScaledDebt;
+        uint256 collateralAmount;
         bytes32 merkleRoot;
         bytes32 evidenceHash;
         uint256 reviewEndsAt;
@@ -15,6 +16,7 @@ interface IProRataCollateralDistributor {
         address indexed market,
         uint256 indexed snapshotBlock,
         uint256 totalScaledDebt,
+        uint256 collateralAmount,
         bytes32 merkleRoot,
         bytes32 evidenceHash,
         uint256 reviewEndsAt
@@ -43,9 +45,11 @@ interface IProRataCollateralDistributor {
     error InvalidReviewDelay();
     error InvalidSnapshotBlock();
     error InvalidTotalScaledDebt();
+    error InvalidCollateralAmount();
     error InvalidMerkleRoot();
     error InvalidEvidenceHash();
     error InvalidReviewEnd();
+    error InsufficientCollateral();
     error SnapshotAlreadyFinalized();
     error SnapshotNotFinalized();
     error SnapshotProposalActive();
@@ -61,6 +65,7 @@ interface IProRataCollateralDistributor {
         address market,
         uint256 snapshotBlock,
         uint256 totalScaledDebt,
+        uint256 collateralAmount,
         bytes32 merkleRoot,
         bytes32 evidenceHash,
         uint256 reviewEndsAt
