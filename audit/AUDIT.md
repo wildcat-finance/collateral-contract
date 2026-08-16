@@ -35,3 +35,14 @@ Verification after fixes:
   authority/evidence-process risks: the root total must match the leaf sum, leaves are portable if an
   authority reuses a root in the wrong domain, and non-standard collateral tokens can still create
   operational accounting surprises.
+
+## Step 3, round 1 -- 2026-08-17
+
+| id | severity | file | finding | status |
+| --- | --- | --- | --- | --- |
+| none | none | `src/DebtSnapshotEventRecorder.sol` / demo tests | The recorder is an event-only surface with no custody, stored balances or settlement authority. The only writer is the immutable `recorder` address, and invalid zero-account or zero-amount movements revert. No concrete exploit path was identified. | closed |
+
+Leads not pursued: the recorder can emit false data if the configured recorder is wrong or malicious,
+but that is the attestation boundary this prototype is meant to expose. The distributor still treats
+the reconciled Merkle root as the settlement input and enforces the review/funding/claim checks added
+in step 2. `forge test --summary` passed 51/51 after the demo was added.
