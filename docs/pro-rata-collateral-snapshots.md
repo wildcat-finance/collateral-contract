@@ -42,6 +42,17 @@ This is not trustless. The point of v0 is to make the trust boundary small and v
 version can replace the reconciler with a stronger ratifier set, a tracker hook deployed from market
 inception, or a proof system.
 
+## Event recorder prototype
+
+`DebtSnapshotEventRecorder` is the smallest useful observability surface. A designated recorder,
+standing in for a market hook or adapter, emits scaled debt movements for deposits, transfers and
+queued withdrawals. It does not store balances and it does not decide the settlement root. It gives a
+reconciler a clean event trail to check before proposing a root to the distributor.
+
+The lag is deliberate. The path is: emit movement events, reconcile offchain, propose the root, wait
+through the review delay, finalise the funded snapshot, then let holders claim. If the product needs
+same-block physical settlement, this design is the wrong tool.
+
 ## Why not mutate the debt token
 
 Changing the market token to checkpoint every holder would put a specialised settlement feature in
